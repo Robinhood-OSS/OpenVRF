@@ -24,14 +24,15 @@ their timestamp model, BN254 precompile behavior, Multicall3 availability, and R
 </div>
 
 > [!NOTE]
-> The current direct-payment revision has been tested end to end on Robinhood Chain testnet with
-> genuine drand proofs, authenticated callbacks, and an exact request fee paid directly to the
-> fulfilling relayer. The paid test priced one request at three times its estimated fulfillment gas
-> cost; the public transactions are recorded in the [testnet evidence](docs/robinhood-testnet-evidence.md).
-> Local contract and Docker tests additionally cover restart recovery, multiple relayers, and burst
-> delivery. An independent production audit is still recommended. Callback delivery is asynchronous
-> and depends on drand publication, RPC availability, the relayer, and block inclusion. See the
-> documented [security model](docs/security-status.md) before deploying.
+> The current direct-payment revision has been tested on Robinhood Chain testnet with genuine drand
+> proofs, authenticated callbacks, and an exact request fee paid directly to the fulfilling wallet.
+> That bounded manual smoke test used a fee equal to three times one live gas estimate; it demonstrates
+> payment behavior, not a recommended production price. The continuous PostgreSQL relayer's restart,
+> reconciliation, multiple-wallet, failover, and burst behavior is covered separately by local Docker
+> tests. Public transactions are recorded in the [testnet evidence](docs/robinhood-testnet-evidence.md).
+> An independent production audit is still recommended. Callback delivery is asynchronous and depends
+> on drand publication, RPC availability, relayer availability, and block inclusion. See the documented
+> [security model](docs/security-status.md) before deploying.
 
 ## One request, one verifiable result
 
@@ -55,8 +56,9 @@ directly from the router.
 The router accepts a valid signature for the request's exact drand round. A relayer cannot submit
 an arbitrary number, substitute another round, change the consumer, or choose another result.
 Only approved relayers may submit the proof. They are delivery services, not sources of
-randomness: authorization protects the operator's gas budget, while verification prevents a
-relayer from choosing the result.
+randomness: authorization limits fulfillment races and fee recipients, while proof verification
+prevents a relayer from choosing the result. The off-chain relayer's spending caps protect its gas
+wallet.
 
 ### Failed callbacks do not become redraws
 
@@ -70,7 +72,7 @@ The read-only checker independently verifies the drand signature in JavaScript, 
 request-specific word, and compares it with on-chain state, events, and the fulfillment receipt.
 It requires no wallet and sends no transaction.
 
-### Run the complete delivery path yourself
+### Run the local delivery path yourself
 
 The Node.js relayer is containerized and self-hosted. It validates proofs before paying gas and
 persists retry limits, backoff, spending caps, and ambiguous transaction state across restarts.
@@ -99,11 +101,12 @@ docker build -t openvrf:local .
 npm run test:e2e
 ```
 
-The end-to-end test deploys the real router and example consumer to disposable Anvil, submits ten
+This local end-to-end test deploys the real router and example consumer to disposable Anvil, submits ten
 same-block requests, and starts two Docker relayers. It verifies genuine historical drand round 1000,
 delivers every callback sequentially with distinct request-specific words, pays fees during
 fulfillment, checks PostgreSQL budget renewal and signer locking, then restarts from durable state.
-It uses no public-chain funds and allocates an ephemeral local Anvil port.
+It uses no public-chain funds, does not test live drand publication or Robinhood RPC behavior, and
+allocates an ephemeral local Anvil port.
 
 ## Integrate a contract
 
@@ -284,8 +287,10 @@ The process stops with an error if the configured consumer or relayer wallet is 
 the deployed router. For multiple wallets, set `RELAYER_ADDRESSES` to the same ordered
 comma-separated list on every instance. Request IDs are assigned round-robin (`1` to the first
 address, `2` to the second, and so on); only the assigned wallet submits the initial proof or
-retries that request. Every listed address must be authorized on-chain. Changing the order while
-requests are unfinished can move assignments, so treat the list as immutable deployment configuration.
+retries that request when every operator follows the bundled relayer protocol. Assignment is not
+enforced by the router: any on-chain-authorized relayer can call `fulfill` or `retryCallback`
+directly. Every listed address must be authorized on-chain. Changing the order while requests are
+unfinished can move assignments, so treat the list as immutable deployment configuration.
 `RELAYER_FAILOVER_SECONDS` rotates an unfinished request to the next wallet after each timeout.
 Before signing, the selected wallet takes a shared PostgreSQL request lease; a live holder renews it
 while its transaction is unresolved, preventing boundary races. Persisted versioned configuration
@@ -349,7 +354,10 @@ relayer. `REQUEST_FEE_WEI=0` makes approved consumers free; operators must fund 
 A nonzero value must be paid exactly with every request. The stored amount is transferred directly
 to the relayer in the successful `fulfill` transaction, even when the consumer callback fails. A
 later callback retry receives no fee. Successful paid fulfillments replenish the renewable operating
-cap while lifetime authorized spending remains recorded.
+cap while lifetime authorized spending remains recorded. The testnet evidence's three-times-estimate
+fee is a single functional test value, not a pricing recommendation. Production pricing must account
+for callback gas, gas-price movement, unsuccessful attempts, RPC and service costs, and operating
+margin.
 `withdrawFees` remains an owner-only emergency recovery function and can remove funds reserved for
 pending requests, causing fulfillment to fail until replenished. Use a multisig and never use it for
 routine relayer payment. This
@@ -363,19 +371,21 @@ repository provides no shared funded relayer or hosted endpoint.
 | Relayer | Node tests: deterministic round-robin/failover assignment, renewable and lifetime accounting, stale-WebSocket recovery, event backfill/cursor recovery, optional Multicall3 startup pruning, listener head separation, state migration, high request IDs, endpoint fallback, persistence, retry/backoff, spending limits, and ambiguous receipts |
 | Independent verifier | 3 Node tests: real signature, altered proofs, wrong rounds, and request-input tampering |
 | Local integration | Two-wallet ten-request same-block split, distinct callbacks, direct fee payment, signer locking without premature version activation, stopped-primary takeover, active-version retirement, and PostgreSQL restart on disposable Anvil |
+| Robinhood testnet | Exact current router runtime, genuine live drand proofs, second-future-round selection, zero-fee and paid requests, direct relayer payment, and authenticated callbacks through a bounded manual smoke runner |
 
-The [historical Robinhood Chain testnet evidence](docs/robinhood-testnet-evidence.md) links every
-deployment, request, fulfillment, and callback transaction from a successful public-chain smoke
-run. It is explicitly versioned as evidence for the earlier router tested in that run.
+The [Robinhood Chain testnet evidence](docs/robinhood-testnet-evidence.md) links the deployment,
+request, fulfillment, fee-setting, payment, and callback transactions for the current paid smoke
+test. It also preserves a clearly separated historical first-future-round run.
 
 What this evidence does **not** establish:
 
 - Each request permanently selects the second future drand round, 4–6 seconds after the request
   block timestamp. This is not a callback deadline. Unpredictability assumes the chain timestamp is
   sufficiently fresh that the round is not already public.
-- Approximately five-second delivery has worked in limited Robinhood testnet testing, but it is not
-  guaranteed. Drand publication, RPC availability, relayer processing, gas limits, and transaction
-  inclusion may delay callbacks.
+- The latest paid test took approximately 10–11 seconds from request receipt to fulfillment receipt.
+  This is one observation, not a latency guarantee. The selected beacon being 4–6 seconds ahead is
+  not the callback duration; drand publication, RPC availability, relayer processing, gas limits,
+  and transaction inclusion add delay.
 - The router and Solidity BLS verifier have extensive automated tests but no independent production
   audit or specialist cryptographic review.
 - Delivery requires an authorized relayer to submit and fund the fulfillment transaction. Relayer
