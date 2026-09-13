@@ -24,12 +24,14 @@ their timestamp model, BN254 precompile behavior, Multicall3 availability, and R
 </div>
 
 > [!NOTE]
-> A previous fee-attribution revision was tested end to end on Robinhood Chain testnet with genuine
-> drand proofs, missed-event recovery, and contract callbacks. The current direct-payment revision
-> is covered by local contract and Docker integration tests but needs a fresh testnet deployment. An independent
-> production audit is still recommended. Callback delivery
-> is asynchronous and depends on drand publication, RPC availability, the relayer, and block
-> inclusion. See the documented [security model](docs/security-status.md) before deploying.
+> The current direct-payment revision has been tested end to end on Robinhood Chain testnet with
+> genuine drand proofs, authenticated callbacks, and an exact request fee paid directly to the
+> fulfilling relayer. The paid test priced one request at three times its estimated fulfillment gas
+> cost; the public transactions are recorded in the [testnet evidence](docs/robinhood-testnet-evidence.md).
+> Local contract and Docker tests additionally cover restart recovery, multiple relayers, and burst
+> delivery. An independent production audit is still recommended. Callback delivery is asynchronous
+> and depends on drand publication, RPC availability, the relayer, and block inclusion. See the
+> documented [security model](docs/security-status.md) before deploying.
 
 ## One request, one verifiable result
 

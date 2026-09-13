@@ -25,10 +25,11 @@ No operator-specific addresses, funding-wallet records, or receipts are distribu
 ## Timing trust model
 
 The router selects the second future beacon round after `block.timestamp`. Tests prove the
-scheduled time is 4–6 seconds after that timestamp. A previous fee-attribution revision was
-deployed and exercised on Robinhood Chain testnet with genuine drand fulfillment, callback delivery,
-restart recovery, and relayer fee delivery on 2026-09-10. That historical deployment predates the
-current direct-payment ABI and is not evidence of the current binary.
+scheduled time is 4–6 seconds after that timestamp. The current direct-payment runtime was deployed
+and exercised on Robinhood Chain testnet with genuine drand fulfillment, callback delivery, and a
+nonzero request fee paid directly to the fulfilling relayer on 2026-09-13. A separate historical
+revision exercised restart recovery on testnet, while the current continuous relayer's restart,
+multi-wallet, failover, and burst behavior is covered by the local Docker integration suite.
 No production deployment is recorded in this repository. Deployment accepts
 Robinhood Chain's sequencer ordering and block timestamp
 as the commitment clock. This is the same fundamental trust placed in the chain for contract state;
