@@ -1,0 +1,6 @@
+[submodule "lib/bls-solidity"]
+	path = lib/bls-solidity
+	url = https://github.com/randa-mu/bls-solidity.git
+[submodule "lib/openzeppelin-contracts"]
+	path = lib/openzeppelin-contracts
+	url = https://github.com/OpenZeppelin/openzeppelin-contracts

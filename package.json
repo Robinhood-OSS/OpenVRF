@@ -1,0 +1,22 @@
+{
+  "name": "openvrf",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "engines": {"node": ">=22"},
+  "scripts": {
+    "relay": "node relayer/main.mjs",
+    "test": "node --test relayer/*.test.mjs scripts/verify-request.test.mjs",
+    "test:e2e": "forge build && node scripts/e2e.mjs",
+    "verify:example": "node scripts/verify-request.mjs --fixture examples/evmnet-round-1000.json",
+    "test:verify:e2e": "forge build && node --test scripts/verify-request.integration.test.mjs"
+  },
+  "dependencies": {
+    "ethers": "6.17.0",
+    "pg": "^8.23.0"
+  },
+  "devDependencies": {
+    "drand-client": "1.4.2"
+  }
+}

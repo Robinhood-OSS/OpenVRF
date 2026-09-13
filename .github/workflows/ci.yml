@@ -1,0 +1,36 @@
+name: CI
+
+on:
+    push:
+    pull_request:
+
+permissions:
+    contents: read
+
+jobs:
+    test:
+        runs-on: ubuntu-latest
+        timeout-minutes: 15
+        steps:
+            - name: Check out source
+              uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+              with:
+                  submodules: true
+
+            - name: Install Foundry
+              uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1
+
+            - name: Install Node.js
+              uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+              with:
+                  node-version: 22
+                  cache: npm
+
+            - name: Install Node.js dependencies
+              run: npm ci --ignore-scripts
+
+            - name: Test Solidity contracts
+              run: forge test
+
+            - name: Test relayer and verifier
+              run: npm test

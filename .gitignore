@@ -1,0 +1,35 @@
+out/
+cache/
+node_modules/
+.env
+.env.*
+!.env.example
+secrets/
+broadcast/
+/PLAN.md
+/private/
+/deployments/
+/scripts/create-test-wallets.mjs
+/scripts/test-robinhood.mjs
+/scripts/check-testnet.mjs
+
+# Local operating-system and editor files
+.DS_Store
+.idea/
+.vscode/
+
+# Local logs, coverage and database state
+*.log
+coverage/
+.nyc_output/
+*.sqlite
+*.sqlite-*
+*.db
+relayer-state*.json
+
+# Locally generated credentials and keystores
+keystore/
+keystores/
+*.pem
+*.p12
+*.pfx

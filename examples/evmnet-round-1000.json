@@ -1,0 +1,11 @@
+{
+  "description": "Public drand round; synthetic addresses and chain context, NOT a deployment receipt. Expected word independently computed using Foundry cast abi-encode and cast keccak.",
+  "source": "https://api.drand.sh/04f1e9062b8a81f848fded9c12306733282b2727ecced50032187751166ec8c3/public/1000",
+  "round": 1000,
+  "signature": "0x06fd5996329504d3a56b482d9222bf7205857d0a9559ddd216ca31a286f6a8cc0a120f021aac2f13553fb164f62bc3a5ca32c76dea88a777b39bcf3cac5fdbd6",
+  "chainId": "31337",
+  "router": "0x0000000000000000000000000000000000000001",
+  "requestId": "1",
+  "consumer": "0x0000000000000000000000000000000000000002",
+  "randomWord": "0x0e8a5cb31c442b05098fd6f2328a4791aa7c19b81da633765212cdea0489db97"
+}

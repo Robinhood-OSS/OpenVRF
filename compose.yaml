@@ -1,0 +1,66 @@
+services:
+  postgres:
+    image: postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: openvrf
+      POSTGRES_USER: openvrf
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U openvrf -d openvrf]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    ports: ["127.0.0.1:${POSTGRES_PORT:-5432}:5432"]
+    volumes: [postgres_data:/var/lib/postgresql/data]
+  relayer:
+    build: .
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 2m
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      RPC_URL: ${RPC_URL:?Set RPC_URL}
+      WS_URL: ${WS_URL:?Set WS_URL}
+      CHAIN_ID: ${CHAIN_ID:-46630}
+      ROUTER_ADDRESS: ${ROUTER_ADDRESS:?Set ROUTER_ADDRESS}
+      CONSUMER_ADDRESS: ${CONSUMER_ADDRESS:?Set CONSUMER_ADDRESS}
+      RELAYER_ADDRESSES: ${RELAYER_ADDRESSES:-}
+      RELAYER_SET_VERSION: ${RELAYER_SET_VERSION:-1}
+      RELAYER_FAILOVER_SECONDS: ${RELAYER_FAILOVER_SECONDS:-60}
+      RELAYER_LEASE_SECONDS: ${RELAYER_LEASE_SECONDS:-120}
+      RELAYER_KEY_FILE: /run/secrets/relayer_key
+      DATABASE_URL: postgresql://openvrf:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/openvrf
+      START_REQUEST_ID: ${START_REQUEST_ID:-1}
+      START_BLOCK: ${START_BLOCK:-0}
+      STARTUP_EVENT_BLOCK_RANGE: ${STARTUP_EVENT_BLOCK_RANGE:-100000}
+      MULTICALL_BATCH_SIZE: ${MULTICALL_BATCH_SIZE:-500}
+      EVENT_BLOCK_RANGE: ${EVENT_BLOCK_RANGE:-2000}
+      REORG_LOOKBACK_BLOCKS: ${REORG_LOOKBACK_BLOCKS:-1000}
+      RECONCILE_HEAD_LAG_BLOCKS: ${RECONCILE_HEAD_LAG_BLOCKS:-5}
+      RECONCILE_SECONDS: ${RECONCILE_SECONDS:-30}
+      RECEIPT_TIMEOUT_SECONDS: ${RECEIPT_TIMEOUT_SECONDS:-60}
+      RECEIPT_CONFIRMATIONS: ${RECEIPT_CONFIRMATIONS:-2}
+      MAX_REBROADCASTS: ${MAX_REBROADCASTS:-5}
+      REBROADCAST_BACKOFF_SECONDS: ${REBROADCAST_BACKOFF_SECONDS:-30}
+      MAX_ATTEMPTS: ${MAX_ATTEMPTS:-3}
+      RETRY_BACKOFF_SECONDS: ${RETRY_BACKOFF_SECONDS:-30}
+      MAX_REQUEST_SPEND_ETH: ${MAX_REQUEST_SPEND_ETH:-0.001}
+      MAX_TOTAL_SPEND_ETH: ${MAX_TOTAL_SPEND_ETH:-0.01}
+      MAX_GAS_PRICE_GWEI: ${MAX_GAS_PRICE_GWEI:-2}
+    secrets: [relayer_key]
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+secrets:
+  relayer_key:
+    file: ./secrets/relayer-key
+volumes:
+  postgres_data:

@@ -1,0 +1,11 @@
+{
+  "lib/bls-solidity": {
+    "rev": "11af179a8287d978659aae07adb66aa60f64b8a6"
+  },
+  "lib/openzeppelin-contracts": {
+    "tag": {
+      "name": "v5.7.0",
+      "rev": "cab19933c33c2ad1d4c7a84864a3601dddfd16f3"
+    }
+  }
+}
