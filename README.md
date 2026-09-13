@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/openvrf-banner.png" alt="OpenVRF — verifiable randomness callbacks for EVM" width="100%">
+<img src="assets/openvrf-logo.png" alt="OpenVRF" width="112">
 
 # OpenVRF
 
@@ -22,6 +22,8 @@ their timestamp model, BN254 precompile behavior, Multicall3 availability, and R
 [Security](docs/security-status.md)
 
 </div>
+
+![Drand beacon randomness flowing through on-chain proof verification to authenticated EVM callbacks](assets/openvrf-banner.png)
 
 > [!NOTE]
 > The current direct-payment revision has been tested on Robinhood Chain testnet with genuine drand
