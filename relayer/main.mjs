@@ -46,7 +46,6 @@ try {
     const env = process.env;
     if (
         !env.RPC_URL ||
-        !env.WS_URL ||
         !isAddress(env.ROUTER_ADDRESS ?? '') ||
         !env.RELAYER_KEY_FILE ||
         !isAddress(env.CONSUMER_ADDRESS ?? '') ||
@@ -75,8 +74,10 @@ try {
         ],
         provider,
     );
-    wsProvider = new WebSocketProvider(env.WS_URL, network.chainId, { staticNetwork: true });
-    wsRouter = new Contract(env.ROUTER_ADDRESS, router.interface, wsProvider);
+    if (env.WS_URL) {
+        wsProvider = new WebSocketProvider(env.WS_URL, network.chainId, { staticNetwork: true });
+        wsRouter = new Contract(env.ROUTER_ADDRESS, router.interface, wsProvider);
+    }
     if ((await router.CHAIN_HASH()) !== `0x${CHAIN_HASH}`) throw new Error('Beacon mismatch');
     if (!(await router.authorizedConsumers(env.CONSUMER_ADDRESS)))
         throw new Error('Consumer is not authorized');
@@ -268,18 +269,20 @@ try {
         }
     };
     wakeRelayer = notify;
-    wsProvider.on('block', (blockNumber) => {
-        latestBlockNumber = blockNumber;
-        blockAdvanced = true;
-        notify();
-    });
-    wsRouter.on(wsRouter.filters.RandomnessRequested(null, env.CONSUMER_ADDRESS), (requestId) => {
-        queuedIds.push(BigInt(requestId));
-        notify();
-    });
+    if (wsProvider && wsRouter) {
+        wsProvider.on('block', (blockNumber) => {
+            latestBlockNumber = blockNumber;
+            blockAdvanced = true;
+            notify();
+        });
+        wsRouter.on(wsRouter.filters.RandomnessRequested(null, env.CONSUMER_ADDRESS), (requestId) => {
+            queuedIds.push(BigInt(requestId));
+            notify();
+        });
+    }
     reconcileTimer = setInterval(notify, reconcileMs);
     console.log(
-        `Relayer ${wallet.address} on chain ${network.chainId}; relayer set ${relayerSetVersion}, round-robin slot ${relayers.indexOf(wallet.address.toLowerCase()) + 1}/${relayers.length}; WebSocket listener active; authorized spending ${state.data.authorizedWei} wei`,
+        `Relayer ${wallet.address} on chain ${network.chainId}; relayer set ${relayerSetVersion}, round-robin slot ${relayers.indexOf(wallet.address.toLowerCase()) + 1}/${relayers.length}; ${wsProvider ? 'WebSocket listener active' : 'HTTP reconciliation active'}; authorized spending ${state.data.authorizedWei} wei`,
     );
     while (!stopping) {
         try {
@@ -296,7 +299,7 @@ try {
                 if (state.data.pending && await reconcileTransaction()) blockAdvanced = true;
                 const head = await reconciliationHead(provider, latestBlockNumber);
                 if (head.changed) {
-                    if (head.websocketBehind) {
+                    if (wsProvider && head.websocketBehind) {
                         console.error(
                             `ALERT WebSocket head ${latestBlockNumber} behind HTTP head ${head.httpHead}; reconciling missed blocks`,
                         );
