@@ -8,7 +8,8 @@ import {setTimeout as sleep} from 'node:timers/promises';
 import {ContractFactory, JsonRpcProvider, Wallet, NonceManager} from 'ethers';
 import {verifySignature, deriveWord} from './verify-request.mjs';
 
-const count = 1000;
+const count = Number(process.argv[3] ?? 1000);
+assert(Number.isSafeInteger(count) && count > 0 && count <= 10000, 'Sample count must be between 1 and 10000');
 const fixture = JSON.parse(await readFile('examples/evmnet-round-1000.json', 'utf8'));
 const randomness = await verifySignature(fixture.signature, fixture.round);
 const port = await new Promise(resolve => {
@@ -18,8 +19,18 @@ const port = await new Promise(resolve => {
 const roundTime = 1727521075 + (fixture.round - 1) * 3;
 const anvil = spawn('anvil', ['--host', '127.0.0.1', '--port', String(port), '--timestamp',
   String(roundTime - 4), '--silent'], {stdio: 'ignore'});
-const p = new JsonRpcProvider(`http://127.0.0.1:${port}`, 31337, {staticNetwork: true, cacheTimeout: -1});
-p.pollingInterval = 10;
+const p = new JsonRpcProvider(`http://127.0.0.1:${port}`, 31337, {staticNetwork: true, cacheTimeout: -1, batchStallTime: 0});
+// Poll receipts directly with a deadline; event-based tx.wait() stalled during
+// the first 10k request-only run despite the receipt already being mined.
+async function mined(tx) {
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    const receipt = await p.getTransactionReceipt(tx.hash);
+    if (receipt) { assert.equal(receipt.status, 1, `Transaction reverted: ${tx.hash}`); return receipt; }
+    await sleep(20);
+  }
+  throw new Error(`Receipt timeout: ${tx.hash}`);
+}
 try {
   for (let i = 0; ; i++) {
     try {await p.getBlockNumber(); break;} catch {if (i > 50) throw new Error('Anvil startup failed'); await sleep(100);}
@@ -30,28 +41,29 @@ try {
   const artifact = async name => JSON.parse(await readFile(`out/${name}.sol/${name}.json`, 'utf8'));
   const ra = await artifact('OpenVRF');
   const router = await new ContractFactory(ra.abi, ra.bytecode.object, signer).deploy(await signer.getAddress(), await signer.getAddress(), 0);
-  await router.waitForDeployment();
+  await mined(router.deploymentTransaction());
   const ca = await artifact('ExampleConsumer');
   const consumers = [];
   for (let i = 0; i < 2; i++) {
     const c = await new ContractFactory(ca.abi, ca.bytecode.object, signer).deploy(await router.getAddress());
-    await c.waitForDeployment();
-    await (await router.setConsumerAuthorization(await c.getAddress(), true)).wait();
+    await mined(c.deploymentTransaction());
+    await mined(await router.setConsumerAuthorization(await c.getAddress(), true));
     consumers.push(c);
   }
   const samples = [];
   for (let i = 0; i < count; i++) {
     await p.send('evm_setNextBlockTimestamp', [roundTime - 4]);
     const tx = await consumers[i % 2].request();
-    const receipt = await tx.wait();
+    const receipt = await mined(tx);
     const event = receipt.logs.map(l => {try {return router.interface.parseLog(l);} catch {return null;}})
       .find(e => e?.name === 'RandomnessRequested');
     assert.equal(event.args.requestId, BigInt(i + 1));
     assert.equal(event.args.round, BigInt(fixture.round));
     samples.push({requestId: String(event.args.requestId), consumer: event.args.consumer,
       requestNonce: tx.nonce, requestBlock: receipt.blockNumber, requestTransaction: tx.hash});
+    if ((i + 1) % 100 === 0) console.log(`Requests mined: ${i + 1}/${count}`);
   }
-  // All 1000 requests, across two consumers, are pending before any fulfillment.
+  // All requests, across two consumers, are pending before any fulfillment.
   for (const s of samples) {
     const q = await router.requests(s.requestId);
     assert.equal(q.fulfilled, false); assert.equal(q.delivered, false);
@@ -62,7 +74,7 @@ try {
   for (let i = count - 1; i >= 0; i--) {
     const s = samples[i];
     const tx = await router.fulfill(s.requestId, fixture.signature);
-    const receipt = await tx.wait();
+    const receipt = await mined(tx);
     const q = await router.requests(s.requestId);
     assert.equal(q.fulfilled, true); assert.equal(q.delivered, true);
     const c = consumers[i % 2];
@@ -92,7 +104,7 @@ try {
   const result = {kind: 'LOCAL_ACTUAL_CONTRACT', chainId: 31337, count, consumers: await Promise.all(consumers.map(c => c.getAddress())),
     router: await router.getAddress(), fixture, pendingBeforeCallbacks, nonceCount: count * 2,
     raw256Normalized: raw, moduloMillionRoll: rolls, diagnosticPass,
-    limitations: 'Fixed public beacon round; tests request/consumer derivation, callback isolation and uniformity diagnostics. Not proof of unpredictability, fairness or independence; not 1000 live-chain samples.', samples};
+    limitations: 'Fixed public beacon round; tests request/consumer derivation, callback isolation and uniformity diagnostics. Not proof of unpredictability, fairness or independence; not live-chain samples.', samples};
   const output = process.argv[2] ?? '/tmp/openvrf-distribution-1000.json';
   await writeFile(output, JSON.stringify(result, null, 2));
   console.log(JSON.stringify({output, count, pendingBeforeCallbacks, raw, rolls, diagnosticPass}));

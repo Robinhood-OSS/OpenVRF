@@ -1,5 +1,27 @@
 # Reproducible distribution diagnostics
 
+## 10,000 local requests — 2026-09-17
+
+`node scripts/distribution-local.mjs examples/distribution-local-10000.json 10000`
+completed 10,000 actual local requests and callbacks. All were pending before
+reverse delivery across two consumers; BLS proof, derivation, consumer isolation,
+request IDs and nonce uniqueness checks passed. The earlier abandoned attempt
+stalled during receipt waiting before any result analysis. Bounded receipt
+polling fixed that transport issue; no outcomes were discarded to improve statistics.
+
+Analysis uses `(randomWord % 1000000) + 1`, not an oracle odds denominator.
+Ten roll bins: `[982,1021,993,1038,984,982,982,1042,1008,968]`.
+Roll chi-square 6.014, raw-word chi-square 13.682 (9 df, 5% diagnostic threshold
+16.919); roll serial correlation -0.0153759. These samples look consistent with
+uniform distribution, not bell-shaped. They do not certify cryptographic security.
+This fixed genuine beacon round tests request-specific derivation and concurrent
+callback isolation, not 10,000 independent beacon rounds or public-chain draws.
+
+Full samples: `examples/distribution-local-10000.json`. Plot: matching `.svg` and
+`.png`; regenerate SVG with `scripts/distribution-graph.mjs`.
+
+## Earlier 1,000-sample checks (retained evidence)
+
 Run from the repository root after `forge build`:
 
 ```sh
