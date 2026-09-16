@@ -44,11 +44,16 @@ for (const event of ['uncaughtException', 'unhandledRejection'])
     });
 try {
     const env = process.env;
+    // Router-wide mode discovers newly authorized campaigns without restarting the worker.
+    // Keep single-consumer mode explicit for existing deployments.
+    const allConsumers = env.RELAY_ALL_CONSUMERS === 'true';
+    const consumer = allConsumers ? undefined : env.CONSUMER_ADDRESS;
+    const consumerScope = allConsumers ? 'all-consumers' : consumer;
     if (
         !env.RPC_URL ||
         !isAddress(env.ROUTER_ADDRESS ?? '') ||
         !env.RELAYER_KEY_FILE ||
-        !isAddress(env.CONSUMER_ADDRESS ?? '') ||
+        (!allConsumers && !isAddress(consumer ?? '')) ||
         !env.DATABASE_URL
     )
         throw new Error('Missing configuration');
@@ -79,7 +84,7 @@ try {
         wsRouter = new Contract(env.ROUTER_ADDRESS, router.interface, wsProvider);
     }
     if ((await router.CHAIN_HASH()) !== `0x${CHAIN_HASH}`) throw new Error('Beacon mismatch');
-    if (!(await router.authorizedConsumers(env.CONSUMER_ADDRESS)))
+    if (consumer && !(await router.authorizedConsumers(consumer)))
         throw new Error('Consumer is not authorized');
     const owner = await router.owner();
     if (
@@ -140,7 +145,7 @@ try {
     }
     state = await openRelayState(
         env.DATABASE_URL,
-        `${network.chainId}:${wallet.address}:${env.ROUTER_ADDRESS}:${env.CONSUMER_ADDRESS}`.toLowerCase(),
+        `${network.chainId}:${wallet.address}:${env.ROUTER_ADDRESS}:${consumerScope}`.toLowerCase(),
         {
             maxAttempts: Number(env.MAX_ATTEMPTS ?? '3'),
             backoffMs: Number(env.RETRY_BACKOFF_SECONDS ?? '30') * 1000,
@@ -150,7 +155,7 @@ try {
         startBlock,
         `${network.chainId}:${wallet.address}`.toLowerCase(),
         {
-            scope: `${network.chainId}:${env.ROUTER_ADDRESS}:${env.CONSUMER_ADDRESS}`.toLowerCase(),
+            scope: `${network.chainId}:${env.ROUTER_ADDRESS}:${consumerScope}`.toLowerCase(),
             version: relayerSetVersion,
             policy: {
                 algorithm: 'request-id-round-robin-v1',
@@ -212,7 +217,7 @@ try {
     await syncRequests({
         router,
         state,
-        consumer: env.CONSUMER_ADDRESS,
+        consumer,
         latestBlock: BigInt(latestBlock.number),
         startId,
         blockRange: startupBlockRange,
@@ -228,7 +233,7 @@ try {
         router,
         multicall,
         state,
-        consumer: env.CONSUMER_ADDRESS,
+        consumer,
         batchSize: multicallBatchSize,
     });
 
@@ -275,7 +280,7 @@ try {
             blockAdvanced = true;
             notify();
         });
-        wsRouter.on(wsRouter.filters.RandomnessRequested(null, env.CONSUMER_ADDRESS), (requestId) => {
+        wsRouter.on(wsRouter.filters.RandomnessRequested(null, consumer ?? null), (requestId) => {
             queuedIds.push(BigInt(requestId));
             notify();
         });
@@ -310,7 +315,7 @@ try {
                 await syncRequests({
                     router,
                     state,
-                    consumer: env.CONSUMER_ADDRESS,
+                    consumer,
                     latestBlock: BigInt(head.httpHead),
                     startId,
                     blockRange,
@@ -330,7 +335,7 @@ try {
                     send,
                     now: BigInt(processingBlock.timestamp),
                     urls,
-                    consumer: env.CONSUMER_ADDRESS,
+                    consumer,
                     relayer: wallet.address.toLowerCase(),
                     relayers,
                     failoverSeconds,

@@ -42,6 +42,43 @@ async function relayOnce(options) {
 }
 
 const signature = 'ab'.repeat(64);
+test('router-wide discovery uses no consumer filter and retains both campaigns', async () => {
+  const state = memoryState();
+  await syncRequests({state, latestBlock: 1n, headLag: 0n, router: {
+    filters: {RandomnessRequested: (id, consumer) => {
+      assert.equal(id, null);
+      assert.equal(consumer, null);
+      return 'all-campaigns';
+    }},
+    queryFilter: async () => [{args: {requestId: 1n}}, {args: {requestId: 2n}}],
+  }});
+  assert.deepEqual(state.requestIds(), [1n, 2n]);
+});
+
+test('router-wide worker isolates a failed campaign and retries it on a later pass', async () => {
+  const state = memoryState([1n, 2n]);
+  const delivered = new Set();
+  const sent = [];
+  let failFirst = true;
+  const router = {
+    requests: async id => ({consumer: id === 1n ? '0xabc' : '0xdef', round: 1n,
+      delivered: delivered.has(id), fulfilled: true, callbackGasLimit: 100000n}),
+    retryCallback: async id => {
+      if (id === 1n && failFirst) throw new Error('campaign callback failure');
+      sent.push(id);
+      return {hash: '0x1', wait: async () => delivered.add(id)};
+    },
+  };
+  const options = {state, router, now: GENESIS, urls: [], log: () => {}};
+  await relayOnce(options);
+  assert.deepEqual(sent, [2n]);
+  assert.deepEqual(state.requestIds(), [1n]);
+  failFirst = false;
+  await relayOnce(options);
+  assert.deepEqual(sent, [2n, 1n]);
+  assert.deepEqual(state.requestIds(), []);
+});
+
 test('request IDs are assigned round-robin to one configured relayer', () => {
   const relayers = ['0xaaa', '0xbbb', '0xccc'];
   assert.equal(assignedRelayer(1n, relayers), relayers[0]);
@@ -282,6 +319,9 @@ test('startup multicall prunes completed and wrong-consumer requests in batches'
   await pruneCompletedRequests({router, multicall, state, consumer, batchSize: 2});
   assert.deepEqual(batches, [2, 2]);
   assert.deepEqual(state.requestIds(), [2n, 4n]);
+  const routerWideState = memoryState([1n, 2n, 3n, 4n]);
+  await pruneCompletedRequests({router, multicall, state: routerWideState, batchSize: 2});
+  assert.deepEqual(routerWideState.requestIds(), [2n, 3n, 4n]);
 });
 
 test('unavailable Multicall3 leaves startup requests for individual verification', async () => {

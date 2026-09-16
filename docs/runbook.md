@@ -27,6 +27,19 @@ Anvil uses an ephemeral host port for Docker access.
 
 ## Deploy a router and consumer
 
+For PowerPot's multiple campaigns on one router, run one relayer with
+`RELAY_ALL_CONSUMERS=true`. It discovers all router request events, including campaigns
+authorized after startup; no per-campaign relayer is needed. Consumer authorization remains
+enforced by the router. Leave the flag false and set `CONSUMER_ADDRESS` only when intentionally
+restricting a worker to one campaign.
+
+When switching an existing worker to router-wide mode, stop the old worker first and reconcile
+any pending transaction before switching. The new scope backfills from `START_BLOCK`, so set it
+to the router deployment block. The existing signer-wide PostgreSQL lock prevents a second
+worker with the same signer from racing nonces; do not bypass it or use separate databases for
+the same signer. Existing request leases, retry limits and spending limits still apply. Use the
+same router-wide scope and relayer list for all wallets in a multi-wallet deployment.
+
 Use a dedicated funded testnet deployer and a local Foundry keystore. For Robinhood testnet
 (chain ID 46630), simulate first:
 

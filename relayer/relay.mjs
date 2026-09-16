@@ -48,7 +48,7 @@ export async function syncRequests({router, state, consumer, latestBlock, startI
   if (from < firstBlock) from = firstBlock;
   if (from > safeHead) from = safeHead >= lookback ? safeHead - lookback + 1n : firstBlock;
   if (from < firstBlock) from = firstBlock;
-  const filter = router.filters.RandomnessRequested(null, consumer);
+  const filter = router.filters.RandomnessRequested(null, consumer ?? null);
   while (from <= safeHead && !isStopping()) {
     const to = from + blockRange - 1n < safeHead ? from + blockRange - 1n : safeHead;
     if (from > BigInt(Number.MAX_SAFE_INTEGER) || to > BigInt(Number.MAX_SAFE_INTEGER)) {
@@ -85,7 +85,7 @@ export async function pruneCompletedRequests({router, multicall, state, consumer
       if (!results[index]?.success) continue;
       try {
         const request = router.interface.decodeFunctionResult('requests', results[index].returnData);
-        if (request.delivered || request.consumer.toLowerCase() !== consumer.toLowerCase()) {
+        if (request.delivered || (consumer && request.consumer.toLowerCase() !== consumer.toLowerCase())) {
           completed.push(batch[index]);
         }
       } catch { /* Keep malformed results pending for authoritative individual verification. */ }
