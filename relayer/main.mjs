@@ -49,8 +49,8 @@ for (const event of ['uncaughtException', 'unhandledRejection'])
     });
 try {
     const env = process.env;
-    // Router-wide mode discovers newly authorized campaigns without restarting the worker.
-    // Keep single-consumer mode explicit for existing deployments.
+    // Router-wide mode discovers newly authorized campaigns without restarting the worker
+    // and is the Compose default; bare Node runs still require explicit opt-in here.
     const allConsumers = env.RELAY_ALL_CONSUMERS === 'true';
     const consumer = allConsumers ? undefined : env.CONSUMER_ADDRESS;
     const consumerScope = allConsumers ? 'all-consumers' : consumer;

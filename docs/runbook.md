@@ -28,10 +28,10 @@ Anvil uses an ephemeral host port for Docker access.
 ## Deploy a router and consumer
 
 For PowerPot's multiple campaigns on one router, run one relayer with
-`RELAY_ALL_CONSUMERS=true`. It discovers all router request events, including campaigns
-authorized after startup; no per-campaign relayer is needed. Consumer authorization remains
-enforced by the router. Leave the flag false and set `CONSUMER_ADDRESS` only when intentionally
-restricting a worker to one campaign.
+`RELAY_ALL_CONSUMERS=true` (the Compose default). It discovers all router request events,
+including campaigns authorized after startup; no per-campaign relayer is needed. Consumer
+authorization remains enforced by the router. Set the flag false and `CONSUMER_ADDRESS` only
+when intentionally restricting a worker to one campaign.
 
 When switching an existing worker to router-wide mode, stop the old worker first and reconcile
 any pending transaction before switching. The new scope backfills from `START_BLOCK`, so set it
