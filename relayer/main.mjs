@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import {
     Contract,
     FetchRequest,
@@ -20,6 +20,11 @@ import {
 } from './relay.mjs';
 import { openRelayState } from './state.mjs';
 import { boundedSender, reconcilePending } from './sender.mjs';
+
+// A node-postgres Client never reconnects after its connection dies: every database read then
+// rejects on every poll while the process stays alive, so Docker's restart policy never fires.
+// Persistent poll failure must exit nonzero for the orchestrator; transient failures only log.
+const MAX_CONSECUTIVE_POLL_FAILURES = 5;
 
 let provider,
     wsProvider,
@@ -62,7 +67,11 @@ try {
     provider = new JsonRpcProvider(connection);
     const network = await provider.getNetwork();
     if (network.chainId !== BigInt(env.CHAIN_ID ?? '46630')) throw new Error('Chain ID mismatch');
-    const wallet = new Wallet((await readFile(env.RELAYER_KEY_FILE, 'utf8')).trim(), provider);
+    const keyFile = env.RELAYER_KEY_FILE;
+    const wallet = new Wallet((await readFile(keyFile, 'utf8')).trim(), provider);
+    // e2e.mjs deliberately uses 0644 disposable keys for Docker mounts; warn only.
+    if ((await stat(keyFile)).mode & 0o077)
+        console.error(`WARNING ${keyFile} is readable by group or other users; restrict it to mode 0600`);
     const router = new Contract(
         env.ROUTER_ADDRESS,
         [
@@ -169,16 +178,16 @@ try {
     const reconcileTransaction = async () => {
         const pendingId = state.data.pending?.id;
         let ownsLease = true;
-        if (state.data.pending?.id && /^\d+$/.test(state.data.pending.id)) {
+        if (pendingId) {
             ownsLease = await state.acquireRequest(
-                BigInt(state.data.pending.id), wallet.address.toLowerCase(), leaseSeconds,
+                BigInt(pendingId), wallet.address.toLowerCase(), leaseSeconds,
             );
         }
         const result = await reconcilePending({
             wallet, provider, state, receiptTimeoutMs, confirmations, allowBroadcast: ownsLease,
             maxRebroadcasts, rebroadcastBackoffMs,
             isObsolete: async (pending) => {
-                if (!pending.signedTransaction || !/^\d+$/.test(pending.id)) return false;
+                if (!pending.signedTransaction) return false;
                 let method;
                 try {
                     const transaction = Transaction.from(pending.signedTransaction);
@@ -260,7 +269,8 @@ try {
     // conservative operating ledger.
     let queuedIds = [],
         blockAdvanced = true,
-        lastReconcile = Date.now();
+        lastReconcile = Date.now(),
+        consecutivePollFailures = 0;
     let wake;
     const waitForWake = () =>
         new Promise((resolve) => {
@@ -343,9 +353,17 @@ try {
                     isStopping: () => stopping,
                 });
             }
+            consecutivePollFailures = 0;
         } catch (error) {
             if (state.failed) throw error;
             console.error(`Poll failed (${error.code ?? error.name ?? 'error'})`);
+            if (++consecutivePollFailures >= MAX_CONSECUTIVE_POLL_FAILURES) {
+                console.error(
+                    `ALERT ${MAX_CONSECUTIVE_POLL_FAILURES} consecutive poll failures; stopping so the orchestrator starts a fresh worker`,
+                );
+                fatalError = error instanceof Error ? error : new Error(String(error));
+                stopping = true;
+            }
         }
         if (!stopping) await waitForWake();
     }

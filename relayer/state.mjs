@@ -1,5 +1,5 @@
-import {mkdir, readFile, open, rename, rmdir} from 'node:fs/promises';
-import {dirname} from 'node:path';
+import {mkdir, readFile, open, rename, rm, writeFile} from 'node:fs/promises';
+import {dirname, join} from 'node:path';
 import {randomUUID} from 'node:crypto';
 
 const unixMillis = value => {
@@ -91,7 +91,24 @@ export async function openRelayState(path, scope, limits, startBlock = 0n, coord
   } else {
     await mkdir(dirname(path), {recursive: true, mode: 0o700});
     lock = `${path}.lock`;
-    await mkdir(lock, {mode: 0o700});
+    // The holder records its PID inside the lock directory so a SIGKILLed process does not
+    // block every later start. A live or unverifiable holder keeps the fail-closed error.
+    for (;;) {
+      try {
+        await mkdir(lock, {mode: 0o700});
+        break;
+      } catch (error) {
+        if (error.code !== 'EEXIST') throw error;
+        const pid = Number((await readFile(join(lock, 'pid'), 'utf8').catch(() => '')).trim());
+        let stale = false;
+        if (Number.isSafeInteger(pid) && pid > 0) {
+          try { process.kill(pid, 0); } catch (probe) { stale = probe.code === 'ESRCH'; }
+        }
+        if (!stale) throw error;
+        await rm(lock, {recursive: true, force: true});
+      }
+    }
+    await writeFile(join(lock, 'pid'), `${process.pid}\n`, {mode: 0o600});
   }
   try {
     let data;
@@ -144,6 +161,22 @@ export async function openRelayState(path, scope, limits, startBlock = 0n, coord
         data.pending.nextRebroadcastAt = legacyTimestamp(data.pending.nextRebroadcastAt);
       }
     }
+    // Legacy ledgers could carry a non-numeric 'fee-claim' operation; no current code creates
+    // one. Retire a settled reservation into lifetime spending, and keep an unresolved one under
+    // manual intervention — re-keyed so pending IDs stay uniformly numeric — for receipt monitoring.
+    if (data.version === 6 && data.scope === scope && data.requests?.['fee-claim']) {
+      const legacy = data.requests['fee-claim'];
+      delete data.requests['fee-claim'];
+      if (data.pending?.id === 'fee-claim') {
+        const syntheticId = String(Number.MAX_SAFE_INTEGER);
+        data.requests[syntheticId] = legacy;
+        data.pending.id = syntheticId;
+        data.pending.manualIntervention = true;
+        data.pending.manualReason = 'legacy fee-claim operation';
+      } else {
+        data.retiredWei = String(BigInt(data.retiredWei) + BigInt(legacy.authorizedWei));
+      }
+    }
     if (data.version !== 6 || data.scope !== scope || !decimal(data.authorizedWei) ||
         !decimal(data.reimbursedWei) || BigInt(data.reimbursedWei) > BigInt(data.authorizedWei) ||
         !decimal(data.retiredWei) ||
@@ -155,7 +188,7 @@ export async function openRelayState(path, scope, limits, startBlock = 0n, coord
     }
     let total = BigInt(data.retiredWei);
     for (const [id, entry] of Object.entries(data.requests)) {
-      if ((!/^[1-9][0-9]*$/.test(id) && id !== 'fee-claim') || !Number.isSafeInteger(entry.attempts) || entry.attempts < 1 ||
+      if (!/^[1-9][0-9]*$/.test(id) || !Number.isSafeInteger(entry.attempts) || entry.attempts < 1 ||
           !decimal(entry.authorizedWei) || !decimal(entry.nextAttemptAt)) throw new Error('Invalid request state');
       total += BigInt(entry.authorizedWei);
     }
@@ -358,14 +391,14 @@ export async function openRelayState(path, scope, limits, startBlock = 0n, coord
         if (postgres) {
           await client.query('SELECT pg_advisory_unlock(hashtextextended($1, 0))', [coordinationScope]);
           await client.end();
-        } else await rmdir(lock);
+        } else await rm(lock, {recursive: true, force: true});
       },
     };
     await state.save();
     return state;
   } catch (error) {
     if (postgres) await client.end().catch(() => {});
-    else await rmdir(lock);
+    else await rm(lock, {recursive: true, force: true});
     throw error;
   }
 }

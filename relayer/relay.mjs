@@ -2,6 +2,8 @@ export const CHAIN_HASH = '04f1e9062b8a81f848fded9c12306733282b2727ecced50032187
 export const GENESIS = 1727521075n;
 export const PERIOD = 3n;
 export const MULTICALL3_ADDRESS = '0xcA11bde05977b3631167028862bE2a173976CA11';
+// A request read returning the zero address means the ID does not exist on chain.
+export const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 
 // Every instance using the same ordered list independently reaches the same assignment.
 export function assignedRelayer(requestId, relayers, readyAt = 0n, now = readyAt, failoverSeconds = 0n) {
@@ -85,7 +87,8 @@ export async function pruneCompletedRequests({router, multicall, state, consumer
       if (!results[index]?.success) continue;
       try {
         const request = router.interface.decodeFunctionResult('requests', results[index].returnData);
-        if (request.delivered || (consumer && request.consumer.toLowerCase() !== consumer.toLowerCase())) {
+        if (request.delivered || request.consumer.toLowerCase() === ZERO_ADDRESS ||
+            (consumer && request.consumer.toLowerCase() !== consumer.toLowerCase())) {
           completed.push(batch[index]);
         }
       } catch { /* Keep malformed results pending for authoritative individual verification. */ }
@@ -103,7 +106,10 @@ export async function relayOnce({router, state, send, now, urls, consumer, relay
     if (isStopping()) break;
     try {
       const request = await router.requests(id);
-      if (request.delivered || (consumer && request.consumer.toLowerCase() !== consumer.toLowerCase())) {
+      // A zeroed on-chain record means the request event was reorganized out; it can never
+      // become ready, so drop it in every mode instead of leasing and retrying it forever.
+      if (request.delivered || request.consumer.toLowerCase() === ZERO_ADDRESS ||
+          (consumer && request.consumer.toLowerCase() !== consumer.toLowerCase())) {
         await state.delivered(id);
         continue;
       }

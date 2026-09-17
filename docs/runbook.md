@@ -81,17 +81,17 @@ that `owner()` equals the exact multisig address. Then have the multisig submit
 `setRequestFee(requestFee())`: setting the current value is harmless, but its successful receipt
 proves the multisig can execute an owner-only call. Confirm the sender, destination, chain ID,
 status and calldata. A dedicated counter would prove less while permanently enlarging the contract.
-Use `withdrawFees(recipient, balance)` only to recover the router's native-token balance in an
-emergency; the owner chooses the recipient and amount. It can remove fees reserved for pending
-requests and thereby make fulfillment revert until replenished. This authority is intentionally retained for dead-contract recovery,
-so protect it with the multisig and do not use it for routine relayer reimbursement.
+Use `withdrawFees(recipient, amount)` only to recover native tokens in excess of the fees reserved
+for pending requests; withdrawing reserved fees reverts. This authority is intentionally retained for
+dead-contract recovery, so protect it with the multisig and do not use it for routine relayer reimbursement.
 
 ## Continuous relayer: controlled test use only
 
 To operate the service, configure `.env` from
 `.env.example` with HTTP and WebSocket RPC endpoints plus the exact chain, router and consumer, and provision a dedicated signer in
 `secrets/relayer-key`. The container's non-root user must be able to read that one file. Do not
-mount unrelated keys or a production treasury/admin key.
+mount unrelated keys or a production treasury/admin key. Keep the key file at mode 0600; the
+relayer prints a non-fatal startup warning if it is group- or world-readable.
 
 ```sh
 docker compose up -d --build
@@ -130,6 +130,8 @@ event discovery reads at most 2,000 blocks per query and rechecks a 1,000-block 
 by WebSocket subscription; missed events become eligible for reconciliation after that five-block
 lag. At startup, Multicall3 checks discovered request state in batches of 500 and removes completed
 requests before individual processing; failure leaves them queued for authoritative individual reads.
+A queued ID whose on-chain record no longer exists (its event was reorganized out) is dropped rather
+than retried, in single-consumer and router-wide mode alike.
 Set `START_BLOCK` to the router deployment block; block `0` is safe
 but performs unnecessary initial backfill. These values are configurable in `.env.example` and are not
 estimates of current chain fees. Reservations count maximum cost, not actual receipt fees;
@@ -187,6 +189,9 @@ and retries the unfinished request when its attempt/backoff policy permits.
 The configurable receipt deadline is not chain finality assurance. `uncaughtException` and
 `unhandledRejection` handlers only trigger a nonzero, orderly shutdown; ordinary RPC errors are
 handled at their call sites. A global handler is not permission to continue after an unknown error.
+Five consecutive poll failures — for example a lost PostgreSQL connection, which the driver never
+re-establishes on its own — likewise stop the worker nonzero so the orchestrator starts a fresh
+process; isolated transient failures only log.
 Do not leave it sponsoring the publicly callable example consumer unattended.
 `START_REQUEST_ID` only filters IDs discovered from events. Leave it at `1` unless all earlier
 relevant requests are delivered or intentionally abandoned. Never move `START_BLOCK` forward in

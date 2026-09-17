@@ -9,6 +9,7 @@ import {
   relayOnce as runRelay,
   syncRequests,
   GENESIS,
+  ZERO_ADDRESS,
 } from './relay.mjs';
 
 function memoryState(ids = []) {
@@ -76,6 +77,29 @@ test('router-wide worker isolates a failed campaign and retries it on a later pa
   failFirst = false;
   await relayOnce(options);
   assert.deepEqual(sent, [2n, 1n]);
+  assert.deepEqual(state.requestIds(), []);
+});
+
+test('router-wide worker drops a reorged-out request without ever holding a lease', async () => {
+  const state = memoryState([1n]);
+  let leases = 0;
+  state.acquireRequest = async () => { leases++; return true; };
+  await runRelay({state, now: GENESIS, urls: [], relayer: '0xaaa', relayers: ['0xaaa'],
+    failoverSeconds: 60n, leaseSeconds: 120n, log: () => {}, send: assert.fail, router: {
+      requests: async () => ({consumer: ZERO_ADDRESS, round: 0n, delivered: false,
+        fulfilled: false, callbackGasLimit: 100000n}),
+    }});
+  assert.deepEqual(state.requestIds(), []);
+  assert.equal(leases, 0);
+});
+
+test('single-consumer worker also drops a reorged-out request', async () => {
+  const state = memoryState([1n]);
+  await runRelay({state, now: GENESIS, urls: [], consumer: '0x1', log: () => {},
+    send: assert.fail, router: {
+      requests: async () => ({consumer: ZERO_ADDRESS, round: 0n, delivered: false,
+        fulfilled: false, callbackGasLimit: 100000n}),
+    }});
   assert.deepEqual(state.requestIds(), []);
 });
 
@@ -322,6 +346,25 @@ test('startup multicall prunes completed and wrong-consumer requests in batches'
   const routerWideState = memoryState([1n, 2n, 3n, 4n]);
   await pruneCompletedRequests({router, multicall, state: routerWideState, batchSize: 2});
   assert.deepEqual(routerWideState.requestIds(), [2n, 3n, 4n]);
+});
+
+test('startup multicall prunes reorged-out requests in router-wide mode', async () => {
+  const live = '0x0000000000000000000000000000000000000002';
+  const iface = new Interface([
+    'function requests(uint256) view returns (address consumer,uint64 round,uint32 callbackGasLimit,bool fulfilled,bool delivered,uint256 randomWord,uint256 fee)',
+  ]);
+  const router = {target: '0x0000000000000000000000000000000000000003', interface: iface};
+  const records = {
+    1: [ZERO_ADDRESS, 0n, 0n, false, false, 0n, 0n],
+    2: [live, 1n, 100000n, false, false, 0n, 0n],
+  };
+  const multicall = {aggregate3: {staticCall: async calls => calls.map(call => {
+    const [id] = iface.decodeFunctionData('requests', call.callData);
+    return {success: true, returnData: iface.encodeFunctionResult('requests', records[Number(id)])};
+  })}};
+  const state = memoryState([1n, 2n]);
+  await pruneCompletedRequests({router, multicall, state});
+  assert.deepEqual(state.requestIds(), [2n]);
 });
 
 test('unavailable Multicall3 leaves startup requests for individual verification', async () => {

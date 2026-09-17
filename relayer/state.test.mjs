@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
+import {mkdtemp, mkdir, readFile, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {openRelayState} from './state.mjs';
@@ -111,6 +111,26 @@ test('duplicate writers and different signer/router scopes fail closed', async t
   await state.close();
   await assert.rejects(openRelayState(path, 'other', limits));
 });
+test('a stale file lock from a dead process is taken over', async t => {
+  const path = await fixture(t);
+  await mkdir(`${path}.lock`, {mode: 0o700});
+  // No live process can hold this out-of-range PID.
+  await writeFile(join(`${path}.lock`, 'pid'), '999999999\n', {mode: 0o600});
+  const state = await openRelayState(path, 'scope', limits);
+  await state.indexed([7n], 10n);
+  await state.close();
+  const reopened = await openRelayState(path, 'scope', limits);
+  assert.deepEqual(reopened.requestIds(), [7n]);
+  await reopened.close();
+});
+test('a file lock held by a live process is still refused', async t => {
+  const path = await fixture(t);
+  await mkdir(`${path}.lock`, {mode: 0o700});
+  await writeFile(join(`${path}.lock`, 'pid'), `${process.pid}\n`, {mode: 0o600});
+  await assert.rejects(openRelayState(path, 'scope', limits), {code: 'EEXIST'});
+  // Fail-closed must leave the live holder's lock untouched.
+  assert.equal((await readFile(join(`${path}.lock`, 'pid'), 'utf8')).trim(), String(process.pid));
+});
 test('sender persists reservation before broadcast and retains uncertain submissions', async t => {
   const state = await openRelayState(await fixture(t), 'scope', {...limits, requestWei: 1000000n, totalWei: 1000000n});
   let broadcasts = 0;
@@ -176,6 +196,49 @@ test('version 4 pending transaction migrates bounded recovery fields', async t =
   assert.equal(state.data.requests['1'].nextAttemptAt, '2000');
   assert.equal(state.data.pending.submittedAt, '1000');
   assert.equal(state.data.pending.lastBroadcastAt, '1001');
+  await state.close();
+});
+
+test('a legacy fee-claim pending transaction migrates to manual intervention', async t => {
+  const path = await fixture(t);
+  await writeFile(path, JSON.stringify({version: 6, scope: 'scope', authorizedWei: '10',
+    reimbursedWei: '0', retiredWei: '0',
+    requests: {'fee-claim': {attempts: 1, authorizedWei: '10', nextAttemptAt: '1000'}},
+    pending: {id: 'fee-claim', hash, signedTransaction: '0x1234', nonce: '0', submittedAt: '1000',
+      lastBroadcastAt: '1001', reimbursementWei: '0', rebroadcastCount: 0, nextRebroadcastAt: '0',
+      manualIntervention: false, manualReason: null},
+    firstBlock: '0', nextBlock: '0', pendingIds: {}}), {mode: 0o600});
+  const state = await openRelayState(path, 'scope', limits);
+  assert.equal(state.data.requests['fee-claim'], undefined);
+  assert.match(state.data.pending.id, /^[1-9][0-9]*$/);
+  assert.equal(state.data.requests[state.data.pending.id].authorizedWei, '10');
+  assert.equal(state.data.pending.manualIntervention, true);
+  assert.equal(state.data.pending.manualReason, 'legacy fee-claim operation');
+  assert.equal(state.data.authorizedWei, '10');
+  assert.equal(state.data.retiredWei, '0');
+  // Receipt monitoring continues but automatic broadcasting stays off.
+  const result = await reconcilePending({wallet: {address: '0x1'}, state, provider: {
+    getTransactionReceipt: async () => null, getBlockNumber: async () => 1,
+    getTransactionCount: async () => 0, getTransaction: async () => null,
+  }});
+  assert.equal(result.reason, 'manual intervention: legacy fee-claim operation');
+  await state.close();
+  // The migrated ledger reloads cleanly under the current validator.
+  const reopened = await openRelayState(path, 'scope', limits);
+  assert.equal(reopened.data.pending.manualIntervention, true);
+  await reopened.close();
+});
+
+test('a settled legacy fee-claim reservation folds into lifetime spending', async t => {
+  const path = await fixture(t);
+  await writeFile(path, JSON.stringify({version: 6, scope: 'scope', authorizedWei: '15',
+    reimbursedWei: '0', retiredWei: '5',
+    requests: {'fee-claim': {attempts: 2, authorizedWei: '10', nextAttemptAt: '1000'}},
+    pending: null, firstBlock: '0', nextBlock: '0', pendingIds: {}}), {mode: 0o600});
+  const state = await openRelayState(path, 'scope', limits);
+  assert.equal(state.data.requests['fee-claim'], undefined);
+  assert.equal(state.data.retiredWei, '15');
+  assert.equal(state.data.authorizedWei, '15');
   await state.close();
 });
 
