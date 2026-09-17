@@ -360,20 +360,33 @@ cap while lifetime authorized spending remains recorded. The testnet evidence's 
 fee is a single functional test value, not a pricing recommendation. Production pricing must account
 for callback gas, gas-price movement, unsuccessful attempts, RPC and service costs, and operating
 margin.
-`withdrawFees` remains an owner-only emergency recovery function and can remove funds reserved for
-pending requests, causing fulfillment to fail until replenished. Use a multisig and never use it for
-routine relayer payment. This
+`withdrawFees` remains an owner-only emergency recovery function, but it is capped at the balance
+above the fees reserved for pending requests, so fulfillment backing cannot be withdrawn. Use a
+multisig and never use it for routine relayer payment. This
 repository provides no shared funded relayer or hosted endpoint.
 
 ## Evidence and limitations
 
 | Layer | Current evidence |
 |---|---|
-| Router | 29 Solidity tests: real and invalid proofs, access control, direct proof-relayer payment, stored fees/emergency recovery, ownership, same-result retries, callback failure, reentrancy, domain separation, ordering, and 256 timing-fuzz runs |
+| Router | 31 Solidity tests: real and invalid proofs, access control, direct proof-relayer payment, stored fees/emergency recovery, ownership, same-result retries, callback failure, reentrancy, domain separation, ordering, and 256 timing-fuzz runs |
 | Relayer | Node tests: deterministic round-robin/failover assignment, renewable and lifetime accounting, stale-WebSocket recovery, event backfill/cursor recovery, optional Multicall3 startup pruning, listener head separation, state migration, high request IDs, endpoint fallback, persistence, retry/backoff, spending limits, and ambiguous receipts |
 | Independent verifier | 3 Node tests: real signature, altered proofs, wrong rounds, and request-input tampering |
 | Local integration | Two-wallet ten-request same-block split, distinct callbacks, direct fee payment, signer locking without premature version activation, stopped-primary takeover, active-version retirement, and PostgreSQL restart on disposable Anvil |
 | Robinhood testnet | Exact current router runtime, genuine live drand proofs, second-future-round selection, zero-fee and paid requests, direct relayer payment, and authenticated callbacks through a bounded manual smoke runner |
+
+### Output distribution check
+
+10,000 actual local requests and callbacks (two consumers, reverse-order delivery) produce a
+uniform-looking spread, not a bell curve. Ten roll bins: `[982,1021,993,1038,984,982,982,1042,1008,968]`;
+roll chi-square 6.014 and raw-word chi-square 13.682 against the predeclared 5% threshold of
+16.919 (9 df); roll serial correlation -0.0154.
+
+![Distribution of 10,000 locally delivered random words](examples/distribution-local-10000.png)
+
+This fixed beacon round tests request-specific derivation and concurrent callback isolation; it
+does not certify cryptographic security. Full samples, methodology, and holdout datasets:
+[distribution diagnostics](docs/distribution-check.md).
 
 The [Robinhood Chain testnet evidence](docs/robinhood-testnet-evidence.md) links the deployment,
 request, fulfillment, fee-setting, payment, and callback transactions for the current paid smoke
@@ -430,6 +443,7 @@ and [pinned verifier source](https://github.com/randa-mu/bls-solidity/tree/11af1
 - [Architecture](docs/architecture.md) — components, trust boundaries, sequence, and state diagrams
 - [Operator runbook](docs/runbook.md) — deployment, signer setup, limits, and recovery
 - [Security status](docs/security-status.md) — completed checks and remaining assurance gaps
+- [Distribution diagnostics](docs/distribution-check.md) — reproducible uniformity checks over local and historical samples
 - [Timing model](docs/timing-model.md) — commitment timing and provider-design comparisons
 - [Robinhood testnet evidence](docs/robinhood-testnet-evidence.md) — public deployment, request, proof, and callback transactions
 - [Executable Docker example](scripts/e2e.mjs) — real proof, callback, direct fee payment, and renewable-ledger workflow
