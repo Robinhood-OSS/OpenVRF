@@ -13,6 +13,24 @@ services:
       retries: 10
     ports: ["127.0.0.1:${POSTGRES_PORT:-5432}:5432"]
     volumes: [postgres_data:/var/lib/postgresql/data]
+    init: true
+    command:
+      - postgres
+      - -c
+      - idle_session_timeout=300000
+      - -c
+      - max_connections=150
+      - -c
+      - maintenance_work_mem=128MB
+      - -c
+      - random_page_cost=1.1
+      - -c
+      - shared_buffers=2048MB
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: '7'
   relayer:
     build: .
     init: true
@@ -58,8 +76,8 @@ services:
     logging:
       driver: json-file
       options:
-        max-size: 10m
-        max-file: '3'
+        max-size: 5m
+        max-file: '7'
 secrets:
   relayer_key:
     file: ./secrets/relayer-key
