@@ -7,6 +7,7 @@ import {ExampleConsumer} from "../src/ExampleConsumer.sol";
 interface Vm {
     function warp(uint256) external;
     function deal(address, uint256) external;
+    function etch(address, bytes calldata) external;
     function expectRevert() external;
     function expectRevert(bytes4) external;
     function prank(address) external;
@@ -50,6 +51,46 @@ contract RejectEther {
 
     receive() external payable {
         revert("reject");
+    }
+}
+
+contract EtherSniper {
+    function destroy(address payable target) external payable {
+        selfdestruct(target);
+    }
+}
+
+contract EphemeralConsumer is RandomnessConsumer {
+    uint256 public calls;
+    constructor(OpenVRF router) RandomnessConsumer(router) {}
+
+    function request(uint32 gasLimit) external payable returns (uint256) {
+        return randomnessRouter.requestRandomness{value: msg.value}(gasLimit);
+    }
+
+    function _fulfillRandomness(uint256, uint256) internal override {
+        calls++;
+    }
+}
+
+// A consumer that is also the router owner, probing withdrawFees from inside its own callback.
+contract OwnerConsumer is RandomnessConsumer {
+    bool public lockHeld;
+    constructor(OpenVRF router) RandomnessConsumer(router) {}
+
+    function request(uint32 gasLimit) external payable returns (uint256) {
+        return randomnessRouter.requestRandomness{value: msg.value}(gasLimit);
+    }
+
+    function _fulfillRandomness(uint256, uint256) internal override {
+        (bool ok, bytes memory data) =
+            address(randomnessRouter).call(abi.encodeCall(randomnessRouter.withdrawFees, (payable(address(this)), 1)));
+        require(!ok && data.length == 4, "Reentrant withdrawal succeeded");
+        bytes4 selector;
+        assembly {
+            selector := mload(add(data, 32))
+        }
+        lockHeld = selector == OpenVRF.ReentrantDelivery.selector;
     }
 }
 
@@ -170,32 +211,52 @@ contract OpenVRFTest {
         require(!fulfilled && storedFee == fee, "Failed payment changed request");
     }
 
-    function testEmergencyWithdrawalBlocksPaymentUntilReplenished() public {
+    function testReservedFeesCannotBeWithdrawnBeforeFulfillment() public {
         uint256 fee = 0.001 ether;
         address relayer = address(0x1234);
         router.setRequestFee(fee);
         vm.deal(address(this), fee);
         uint256 id = consumer.request{value: fee}(100_000);
+        require(router.reservedFees() == fee, "Fee not reserved");
+        vm.expectRevert(OpenVRF.WithdrawalFailed.selector);
         router.withdrawFees(payable(address(this)), fee);
         vm.warp(ROUND_TIME);
-        vm.expectRevert(OpenVRF.WithdrawalFailed.selector);
-        vm.prank(relayer);
-        router.fulfill(id, SIGNATURE);
-        vm.deal(address(router), fee);
         uint256 beforeBalance = relayer.balance;
         vm.prank(relayer);
         router.fulfill(id, SIGNATURE);
-        require(relayer.balance == beforeBalance + fee, "Replenished fee was not paid");
+        require(router.reservedFees() == 0, "Reservation not released");
+        require(relayer.balance == beforeBalance + fee && address(router).balance == 0, "Reserved fee not paid");
     }
 
-    function testOwnerEmergencyWithdrawal() public {
+    function testOwnerWithdrawsOnlyUnreservedExcess() public {
         uint256 fee = 0.001 ether;
         router.setRequestFee(fee);
-        vm.deal(address(this), fee);
-        consumer.request{value: fee}(100_000);
+        vm.deal(address(this), fee * 2);
+        uint256 id = consumer.request{value: fee}(100_000);
+        new EtherSniper().destroy{value: fee}(payable(address(router)));
+        require(address(router).balance == fee * 2, "Forced ether missing");
+        vm.expectRevert(OpenVRF.WithdrawalFailed.selector);
+        router.withdrawFees(payable(address(this)), fee + 1);
         uint256 beforeBalance = address(this).balance;
         router.withdrawFees(payable(address(this)), fee);
-        require(address(router).balance == 0 && address(this).balance == beforeBalance + fee, "Bad recovery");
+        require(
+            address(router).balance == fee && address(this).balance == beforeBalance + fee, "Bad excess recovery"
+        );
+        vm.warp(ROUND_TIME);
+        router.fulfill(id, SIGNATURE);
+        require(address(router).balance == 0 && router.reservedFees() == 0, "Reserved fee not paid");
+    }
+
+    function testWithdrawFeesSharesDeliveryLock() public {
+        OpenVRF ownedRouter = new OpenVRF(address(this), address(0x1234), 0);
+        OwnerConsumer ownerConsumer = new OwnerConsumer(ownedRouter);
+        ownedRouter.setConsumerAuthorization(address(ownerConsumer), true);
+        ownedRouter.transferOwnership(address(ownerConsumer));
+        uint256 id = ownerConsumer.request(100_000);
+        vm.warp(ROUND_TIME);
+        vm.prank(address(0x1234));
+        ownedRouter.fulfill(id, SIGNATURE);
+        require(ownerConsumer.lockHeld(), "withdrawFees bypassed the delivery lock");
     }
 
     function testOwnerTransferMovesEmergencyAuthority() public {
@@ -313,6 +374,22 @@ contract OpenVRFTest {
         consumer.setMode(0);
         router.retryCallback(id, 100_000);
         require(consumer.calls() == 1, "Retry failed");
+    }
+
+    function testDestroyedConsumerStaysRetryable() public {
+        EphemeralConsumer ephemeral = new EphemeralConsumer(router);
+        router.setConsumerAuthorization(address(ephemeral), true);
+        uint256 id = ephemeral.request(100_000);
+        // Simulate a selfdestructed consumer: the address persists but holds no code.
+        vm.etch(address(ephemeral), "");
+        require(address(ephemeral).code.length == 0, "Consumer not destroyed");
+        vm.warp(ROUND_TIME);
+        router.fulfill(id, SIGNATURE);
+        (,,, bool fulfilled, bool delivered,,) = router.requests(id);
+        require(fulfilled && !delivered, "Destroyed consumer recorded as delivered");
+        router.retryCallback(id, 100_000);
+        (,,,, delivered,,) = router.requests(id);
+        require(!delivered, "Retry to destroyed consumer delivered");
     }
 
     function testIncreaseCallbackGasAfterFailure() public {

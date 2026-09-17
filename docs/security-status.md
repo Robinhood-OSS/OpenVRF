@@ -9,7 +9,7 @@ specialist cryptographic audit.
 | Area | Evidence in this repository | Still required |
 |---|---|---|
 | Callback | Two-wallet ten-request Docker burst, stopped-primary failover, plus historical Robinhood testnet delivery; sequential consumer/router results agree | Application-specific callback and settlement review |
-| Router correctness | 29 Solidity tests, including access control, direct proof-relayer payment, stored fees/emergency recovery, 256 timing-fuzz cases and second-future-round boundaries | More complete state-machine and edge-condition coverage |
+| Router correctness | 31 Solidity tests, including access control, direct proof-relayer payment, stored fees/emergency recovery, 256 timing-fuzz cases and second-future-round boundaries | More complete state-machine and edge-condition coverage |
 | Verifier interoperability | Genuine public evmnet signature fixtures verified offline | Broad independent reference/differential vectors and specialist review |
 | Relayer | Node tests cover deterministic assignment/failover, renewable accounting, stale-WebSocket recovery, event cursor/queue, state migration, caps/backoff, validated fallback and durable transaction reconciliation | Operational monitoring, request admission control and multi-wallet soak testing |
 | Timing | Second-future-round arithmetic tests and successful Robinhood Chain testnet delivery | Operate under the documented sequencer ordering/timestamp trust model; monitor timestamp freshness |
@@ -86,17 +86,18 @@ Receipt confirmation depth defaults to two and is configurable; it is operationa
 an established finality policy.
 
 The first valid proof submission pays the request's stored fee directly to that authorized relayer,
-even if its callback fails. A later retry receives no fee. The owner retains full-balance emergency
-withdrawal and can therefore remove fees reserved for pending requests; those fulfillments revert
-until the router is replenished. This is an explicit dead-contract recovery authority, not a routine
-payment path.
+even if its callback fails. A later retry receives no fee. Fees of pending requests are reserved: the
+owner's emergency withdrawal is capped at the balance above `reservedFees` and shares the delivery
+reentrancy lock, so it cannot make a pending fulfillment fail. This recovery authority exists for
+tokens forced into the router, not as a routine payment path.
 Paid fulfillment also requires the authorized sender to accept native tokens. The bundled relayer is
 an EOA; contract-wallet relayers must test their receive behavior before authorization.
 
 The owner can change admission and future request fees, but cannot change an existing request's
 round, consumer, proof, result, or stored fee accounting. Compromise of the owner or all authorized relayers
-can censor delivery, and owner compromise can drain fee backing. Standard OpenZeppelin ownership is
-used without a two-step handover; operators must verify transfer recipients and should use a multisig.
+can censor delivery, but owner compromise cannot withdraw fees reserved for pending requests. Standard
+OpenZeppelin ownership is used without a two-step handover; operators must verify transfer recipients
+and should use a multisig.
 
 ## Verifier assurance
 

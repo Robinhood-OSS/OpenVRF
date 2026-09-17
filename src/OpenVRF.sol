@@ -29,6 +29,7 @@ contract OpenVRF is EvmnetRegistry, Ownable {
 
     uint256 public nextRequestId = 1;
     uint256 public requestFee;
+    uint256 public reservedFees;
     mapping(uint256 => Request) public requests;
     mapping(address => bool) public authorizedConsumers;
     mapping(address => bool) public authorizedRelayers;
@@ -112,10 +113,11 @@ contract OpenVRF is EvmnetRegistry, Ownable {
         emit RequestFeeUpdated(oldFee, newFee);
     }
 
-    /// @notice Emergency recovery of native tokens by the owner.
-    /// @dev This can withdraw fees reserved for pending requests and make their fulfillment fail.
-    function withdrawFees(address payable recipient, uint256 amount) external onlyOwner {
+    /// @notice Owner recovery of native tokens above the fees reserved for pending requests.
+    /// @dev Reserved fees leave only through fulfillment; shares the delivery reentrancy lock.
+    function withdrawFees(address payable recipient, uint256 amount) external onlyOwner deliveryLock {
         if (recipient == address(0)) revert InvalidAccount();
+        if (amount > address(this).balance - reservedFees) revert WithdrawalFailed();
         (bool success,) = recipient.call{value: amount}("");
         if (!success) revert WithdrawalFailed();
         emit FeesWithdrawn(recipient, amount);
@@ -144,6 +146,7 @@ contract OpenVRF is EvmnetRegistry, Ownable {
             randomWord: 0,
             fee: msg.value
         });
+        reservedFees += msg.value;
         emit RandomnessRequested(id, msg.sender, round);
     }
 
@@ -171,6 +174,7 @@ contract OpenVRF is EvmnetRegistry, Ownable {
         if (request.fee != 0) {
             uint256 fee = request.fee;
             request.fee = 0;
+            reservedFees -= fee;
             (bool paid,) = payable(msg.sender).call{value: fee}("");
             if (!paid) revert WithdrawalFailed();
             emit RelayerFeePaid(id, msg.sender, fee);
@@ -197,11 +201,15 @@ contract OpenVRF is EvmnetRegistry, Ownable {
         address consumer = request.consumer;
         // Reserve gas for post-call storage/events and EIP-150's withheld 1/64.
         if (gasleft() < callGas + callGas / 63 + 60_000) revert InsufficientGas();
-        request.delivered = true;
         bool success;
-        // Do not copy arbitrary consumer return data into memory.
-        assembly {
-            success := call(callGas, consumer, 0, add(payload, 32), mload(payload), 0, 0)
+        // A call to a codeless (destroyed) consumer succeeds vacuously; count it as failed so a
+        // later retry remains possible.
+        if (consumer.code.length != 0) {
+            request.delivered = true;
+            // Do not copy arbitrary consumer return data into memory.
+            assembly {
+                success := call(callGas, consumer, 0, add(payload, 32), mload(payload), 0, 0)
+            }
         }
         request.delivered = success;
         emit CallbackAttempted(id, success);
