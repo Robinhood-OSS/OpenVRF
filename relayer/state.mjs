@@ -409,8 +409,11 @@ export async function openRelayState(path, scope, limits, startBlock = 0n, coord
       },
       async close() {
         if (postgres) {
-          await client.query('SELECT pg_advisory_unlock(hashtextextended($1, 0))', [coordinationScope]);
-          await client.end();
+          try {
+            await client.query('SELECT pg_advisory_unlock(hashtextextended($1, 0))', [coordinationScope]);
+          } finally {
+            await client.end();
+          }
         } else await rm(lock, {recursive: true, force: true});
       },
     };

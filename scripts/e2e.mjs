@@ -4,7 +4,7 @@ import {mkdtemp, writeFile, readFile, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {setTimeout as sleep} from 'node:timers/promises';
-import {createServer} from 'node:net';
+import {createServer, connect} from 'node:net';
 import {ContractFactory, JsonRpcProvider, Wallet, parseEther, toBeHex} from 'ethers';
 
 const port = await new Promise((resolve, reject) => {
@@ -15,6 +15,19 @@ const port = await new Promise((resolve, reject) => {
     server.close(error => error ? reject(error) : resolve(selected));
   });
 });
+// Proxy only WebSocket transport; HTTP RPC remains available during fault injection.
+const socketPairs = new Set();
+const wsProxy = createServer(client => {
+  const upstream = connect(port, '127.0.0.1');
+  const pair = {client, upstream};
+  socketPairs.add(pair);
+  const close = () => {client.destroy(); upstream.destroy(); socketPairs.delete(pair);};
+  client.on('error', close); upstream.on('error', close);
+  client.on('close', close); upstream.on('close', close);
+  client.pipe(upstream); upstream.pipe(client);
+});
+await new Promise(resolve => wsProxy.listen(0, '0.0.0.0', resolve));
+const wsPort = wsProxy.address().port;
 const burstSize = 10;
 const roundTime = 1727521075 + 999 * 3;
 const name = `openvrf-e2e-${process.pid}`;
@@ -49,6 +62,12 @@ try {
   await consumer.waitForDeployment();
   await (await router.setConsumerAuthorization(await consumer.getAddress(), true)).wait();
   await (await router.setRelayerAuthorization(secondWallet.address, true)).wait();
+  // Fault hooks are mounted only in the disposable test; never copied into the image.
+  const faultFile = join(dir, 'shutdown-faults.mjs');
+  await writeFile(faultFile, `
+    process.on('SIGUSR1', () => { throw new Error('test uncaught exception'); });
+    process.on('SIGUSR2', () => { Promise.reject(new Error('test unhandled rejection')); });
+  `, {mode: 0o644});
   const keyFiles = [join(dir, 'key-a'), join(dir, 'key-b')];
   // Random, disposable Anvil-only key. Docker's non-root user needs read access to this mount.
   await writeFile(keyFiles[0], wallet.privateKey, {mode: 0o644});
@@ -67,8 +86,17 @@ try {
       await sleep(1000);
     }
   }
-  execFileSync('docker', ['exec', postgresName, 'psql', '-U', 'openvrf', '-d', 'openvrf', '-c',
-    'CREATE DATABASE openvrf_legacy'], {stdio: 'ignore'});
+  // pg_isready can briefly pass on Postgres's temporary initialization server.
+  for (let attempt = 0; ; attempt++) {
+    try {
+      execFileSync('docker', ['exec', postgresName, 'psql', '-U', 'openvrf', '-d', 'openvrf', '-c',
+        'CREATE DATABASE openvrf_legacy'], {stdio: 'pipe'});
+      break;
+    } catch (error) {
+      if (attempt >= 29) throw error;
+      await sleep(1000);
+    }
+  }
   execFileSync('docker', ['exec', postgresName, 'psql', '-U', 'openvrf', '-d', 'openvrf_legacy', '-c', `
     CREATE TABLE openvrf_relayer_state (
       scope text PRIMARY KEY, data jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now());
@@ -110,7 +138,7 @@ try {
   if (migratedTimes !== '1000123,2000456,3') throw new Error(`Unexpected legacy timestamp migration: ${migratedTimes}`);
   const relayerEnvironment = [
     `RPC_URL=http://host.docker.internal:${port}`,
-    `WS_URL=ws://host.docker.internal:${port}`,
+    `WS_URL=ws://host.docker.internal:${wsPort}`,
     'CHAIN_ID=31337', `ROUTER_ADDRESS=${await router.getAddress()}`,
     `CONSUMER_ADDRESS=${await consumer.getAddress()}`,
     `RELAYER_ADDRESSES=${wallet.address},${secondWallet.address}`,
@@ -124,9 +152,11 @@ try {
   ];
   for (let index = 0; index < relayerNames.length; index++) {
     execFileSync('docker', ['run', '-d', '--name', relayerNames[index],
-      '--network', networkName,
+      '--network', networkName, '--restart', 'unless-stopped',
       '--add-host', 'host.docker.internal:host-gateway',
       '--read-only', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges:true',
+      '-v', `${faultFile}:/shutdown-faults.mjs:ro`,
+      '-e', 'NODE_OPTIONS=--import=/shutdown-faults.mjs',
       '-v', `${keyFiles[index]}:/run/secrets/relayer_key:ro`,
       ...relayerEnvironment.flatMap(value => ['-e', value]), 'openvrf:local'], {stdio: 'pipe'});
   }
@@ -150,6 +180,41 @@ try {
   const activeVersion = execFileSync('docker', ['exec', postgresName, 'psql', '-U', 'openvrf',
     '-d', 'openvrf', '-tAc', 'SELECT version FROM openvrf_relayer_assignment'], {encoding: 'utf8'}).trim();
   if (activeVersion !== '1') throw new Error('Failed startup incorrectly activated a newer relayer set');
+  // Five real transport failures must trigger process exit, Docker restart and fresh subscriptions.
+  const startupCount = container => execFileSync('docker', ['logs', container],
+    {encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']}).split('WebSocket listener active').length - 1;
+  for (let cycle = 1; cycle <= 5; cycle++) {
+    const before = relayerNames.map(startupCount);
+    for (const {client, upstream} of [...socketPairs]) {client.destroy(); upstream.destroy();}
+    let recovered = false;
+    for (let attempt = 0; attempt < 90; attempt++) {
+      await sleep(1000);
+      if (relayerNames.every((container, index) => startupCount(container) > before[index]) &&
+          socketPairs.size === relayerNames.length) {recovered = true; break;}
+    }
+    if (!recovered) throw new Error(`WebSocket disconnect ${cycle} did not recover both relayers`);
+    const head = await provider.getBlockNumber();
+    console.log(`PASS: WebSocket disconnect ${cycle}/5 recovered both containers; HTTP head ${head}`);
+  }
+  // Exercise the actual main process handlers, not a mock or a separate node process.
+  for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP', 'SIGUSR1', 'SIGUSR2']) {
+    // Docker resets crash backoff after ten healthy seconds; exercise independent faults.
+    await sleep(10000);
+    const container = relayerNames[0];
+    const before = startupCount(container);
+    execFileSync('docker', ['exec', container, 'node', '-e', `process.kill(1, '${signal}')`], {stdio: 'pipe'});
+    let recovered = false;
+    for (let attempt = 0; attempt < 90; attempt++) {
+      await sleep(1000);
+      if (startupCount(container) > before) {recovered = true; break;}
+    }
+    const logs = execFileSync('docker', ['logs', container],
+      {encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']});
+    if (!recovered || logs.split('Relayer shutdown cleanup completed').length - 1 < before)
+      throw new Error(`Shutdown handler ${signal} did not clean up and recover`);
+    if (logs.includes('Resource cleanup failed')) throw new Error(`Cleanup failed after ${signal}`);
+    console.log(`PASS: ${signal} cleaned up and recovered (${signal === 'SIGUSR1' ? 'uncaughtException' : signal === 'SIGUSR2' ? 'unhandledRejection' : 'signal'})`);
+  }
   await provider.send('evm_setNextBlockTimestamp', [roundTime - 2]);
   await provider.send('evm_setAutomine', [false]);
   const firstNonce = await provider.getTransactionCount(requester.address);
@@ -209,6 +274,10 @@ try {
   if (new Set(words.map(String)).size !== burstSize) throw new Error('Burst results were not request-specific');
   if (await provider.getBalance(await router.getAddress()) !== 0n) throw new Error('Relayer fee was not paid directly');
 
+  if (!relayerNames.every(container => execFileSync('docker', ['logs', container],
+      {encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']}).includes('via WebSocket')))
+    throw new Error('Recovered event subscriptions did not discover the burst via WebSocket');
+
   // Stop request 11's primary wallet and prove the next wallet takes over after one chain-time window.
   execFileSync('docker', ['stop', relayerNames[0]], {stdio: 'ignore'});
   const failoverRequest = await consumer.connect(requester).request({value: requestFee});
@@ -220,6 +289,7 @@ try {
   await provider.send('evm_mine', []);
   let failedOver = false;
   for (let i = 0; i < 60; i++) {
+    await provider.send('evm_mine', []);
     if (await consumer.received(failoverId)) { failedOver = true; break; }
     await sleep(1000);
   }
@@ -240,6 +310,7 @@ try {
     await sleep(1000);
   }
   if (!restarted) throw new Error('Relayer did not restart from PostgreSQL state');
+  for (const container of relayerNames) execFileSync('docker', ['update', '--restart=no', container], {stdio: 'ignore'});
   execFileSync('docker', ['exec', postgresName, 'psql', '-U', 'openvrf', '-d', 'openvrf', '-c',
     'UPDATE openvrf_relayer_assignment SET version = 2'], {stdio: 'ignore'});
   await provider.send('evm_mine', []);
@@ -253,6 +324,8 @@ try {
   if (!retired) throw new Error('Older relayer-set processes remained active after version change');
   console.log(`PASS: two Docker relayers split ${burstSize} same-block requests, produced distinct results, received fees during fulfillment, renewed PostgreSQL budgets, enforced signer locks without premature version activation, failed over a stopped primary wallet, restarted from durable state, and retired the old active version.`);
 } finally {
+  for (const {client, upstream} of socketPairs) {client.destroy(); upstream.destroy();}
+  wsProxy.close();
   for (const relayerName of relayerNames) {
     try { execFileSync('docker', ['rm', '-f', relayerName], {stdio: 'ignore'}); } catch {}
   }

@@ -21,7 +21,7 @@ does not wait for Ethereum finality. An application that requires Ethereum-final
 must use a slower policy and accept the corresponding callback latency.
 
 The relayer reacts to WebSocket request and block events; it does not poll HTTP every second. On
-startup and every 30 seconds, an independent HTTP reconciliation reads the current chain head and
+startup and every 15 seconds, an independent HTTP reconciliation reads the current chain head and
 backfills missed request events through five blocks behind it. Both discovery paths feed the same
 ID-keyed persistent queue, so rediscovery does not create a second fulfillment.
 
@@ -37,7 +37,7 @@ flowchart TD
     P --> D[Fetch and preflight exact drand signature]
     D --> F[Submit authorized fulfillment]
     F --> C[Router verifies and calls consumer]
-    X[WebSocket stalls or disconnects] --> T[30-second reconciliation]
+    X[WebSocket stalls or disconnects] --> T[15-second reconciliation]
     T --> RH[Read fresh HTTP head]
     RH --> RB[Recurring eth_getLogs through head minus 5]
     RB --> Q

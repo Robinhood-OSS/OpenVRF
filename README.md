@@ -305,12 +305,12 @@ rather than racing a possibly broadcast transaction.
 | Safety control | Default |
 |---|---:|
 | Live discovery | WebSocket block and request subscriptions |
-| Backfill reconciliation | Every 30 seconds |
+| Backfill reconciliation | Every 15 seconds |
 | Reconciliation head source | Independent HTTP latest-block read |
 | Startup historical event page | 100,000 blocks |
 | Recurring historical event page | 2,000 blocks |
 | Startup Multicall3 batch | 500 request-state reads |
-| Reconciliation lookback | 1,000 blocks every 30 seconds |
+| Reconciliation lookback | 1,000 blocks every 15 seconds |
 | Reconciliation head lag | Skip the newest 5 blocks; live listener owns them |
 | Paid attempts per request | 3 |
 | Retry backoff | 30 seconds, doubling to 1 hour |
@@ -328,7 +328,7 @@ reconciliation checks receipts (including earlier replacement hashes) and mempoo
 rebroadcasts while its nonce remains unused. An underpriced transaction absent from the mempool
 may receive a same-nonce fee replacement within the gas-price and spending caps; its action stays
 fixed and additional gas cost is reserved durably before broadcast. New submissions use the
-greater of the RPC quote and base fee with 30% gas-price headroom. A confirmation-safe consumed nonce retires the impossible old
+greater of the RPC quote and base fee with 50% gas-price headroom. A confirmation-safe consumed nonce retires the impossible old
 transaction so the request can retry. Reaching the rebroadcast limit enters persistent
 `manual_intervention` without erasing recovery data or continuing to broadcast. Run one relayer
 process per signing wallet. Alerts are logs only. See the

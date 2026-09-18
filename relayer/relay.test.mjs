@@ -34,12 +34,13 @@ async function relayOnce(options) {
   for (const method of ['fulfill', 'retryCallback']) {
     if (router[method]) router[method] = {populateTransaction: (...args) => ({method, args})};
   }
-  return runRelay({...options, router, state: options.state ?? memoryState(options.ids),
-    send: async (_id, tx) => {
-      const response = await options.router[tx.method](...tx.args);
-      await response.wait();
-      return {hash: response.hash, status: 1};
-    }});
+  const send = async (_id, tx) => {
+    const response = await options.router[tx.method](...tx.args);
+    await response.wait();
+    return {hash: response.hash, status: 1};
+  };
+  send.prepare = async () => {};
+  return runRelay({...options, router, state: options.state ?? memoryState(options.ids), send});
 }
 
 const signature = 'ab'.repeat(64);
@@ -142,10 +143,10 @@ test('successful proof submission reports its stored fee as reimbursement', asyn
       proveRound: {staticCall: async () => {}},
       fulfill: {populateTransaction: async () => ({to: 'router'})},
     },
-    send: async (_id, _transaction, _gasFloor, fee) => {
+    send: Object.assign(async (_id, _transaction, _gasFloor, fee) => {
       reimbursement = fee;
       return {hash: '0x1', status: 1};
-    }});
+    }, {prepare: async () => {}})});
   assert.equal(reimbursement, 123n);
 });
 

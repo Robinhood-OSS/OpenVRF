@@ -487,7 +487,7 @@ test('gas quote uses current base fee with headroom, even when RPC price lags', 
       signTransaction: async () => '0x1234'},
     state: {reserve: async () => null}, maxGasPrice: 200n});
   assert.equal((await send(1n, {}, 60000n)).reason, 'fee too low');
-  assert.equal(populated.gasPrice, 156n);
+  assert.equal(populated.gasPrice, 180n);
 });
 
 async function replacementFixture(t, requestWei = 10000000n, totalWei = 10000000n) {
@@ -512,7 +512,7 @@ for (const visible of [false, true]) test(`fee replacement persists before broad
       replacement = Transaction.from(raw);
       const saved = JSON.parse(await readFile(path, 'utf8'));
       assert.equal(saved.pending.hash, replacement.hash);
-      assert.equal(saved.authorizedWei, '3276000');
+      assert.equal(saved.authorizedWei, '3780000');
       throw new Error('connection lost');
     }};
   const result = await reconcilePending({wallet, provider, state, maxGasPrice: 200n, now: 2000});
@@ -520,7 +520,7 @@ for (const visible of [false, true]) test(`fee replacement persists before broad
   const old = Transaction.from(original.signedTransaction);
   for (const field of ['nonce','to','from','data','value','gasLimit','chainId','type'])
     assert.equal(replacement[field], old[field]);
-  assert.equal(replacement.gasPrice, 156n);
+  assert.equal(replacement.gasPrice, 180n);
   assert.equal(state.data.requests['1'].attempts, 1);
   assert.deepEqual(state.data.pending.previousHashes, [original.hash]);
   await state.close();

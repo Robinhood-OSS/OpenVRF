@@ -121,14 +121,14 @@ The relayer validates at startup that `CONSUMER_ADDRESS` is an authorized consum
 signing wallet is either the router owner or an authorized relayer. It exits instead of spending
 gas when either check fails.
 
-The signer uses the greater of the RPC gas quote and current base fee, with 30% gas-price
+The signer uses the greater of the RPC gas quote and current base fee, with 50% gas-price
 headroom subject to `MAX_GAS_PRICE_GWEI`. Broadcast rejection logs redact endpoint URLs and
 long hexadecimal payloads. Fund this signer sparingly and monitor its `ALERT` logs. Defaults are three paid attempts per
 request (initial submission plus at most two retries), 30-second exponential backoff capped at
 one hour, 0.001 ETH maximum authorized gas cost per request, a 0.01 ETH renewable operating cap,
 and a 2 gwei gas-price ceiling. Startup recovery reads up to 100,000 blocks per RPC query. Regular
 event discovery reads at most 2,000 blocks per query and rechecks a 1,000-block window during
-30-second reconciliation, stopping five blocks behind the head. Live requests and blocks arrive
+15-second reconciliation, stopping five blocks behind the head. Live requests and blocks arrive
 by WebSocket subscription; missed events become eligible for reconciliation after that five-block
 lag. At startup, Multicall3 checks discovered request state in batches of 500 and removes completed
 requests before individual processing; failure leaves them queued for authoritative individual reads.
@@ -146,7 +146,7 @@ retries raise the callback gas allowance by 50%, capped at 1,000,000 gas.
 requires slower but stronger local bookkeeping.
 
 At startup, the relayer reads the current HTTP head and backfills before processing live work. Each
-30-second reconciliation reads the HTTP head again. If it is ahead of the last WebSocket block, the
+15-second reconciliation reads the HTTP head again. If it is ahead of the last WebSocket block, the
 service logs an alert, advances pending processing, and backfills through five blocks behind that
 HTTP head. A silently stalled WebSocket therefore degrades to delayed HTTP recovery instead of
 silently stopping fulfillment.
@@ -233,3 +233,55 @@ and generated build outputs. Ignore rules do not remove already committed data: 
 diff and scan history before publishing. A public-chain address is not a secret, but associating
 an operator's wallet with a project is a separate disclosure decision. Backups containing prior
 private history must stay outside the public repository.
+
+## Submission latency diagnostics
+
+Gas-price quotes refresh in the background every 30 seconds and expire after 30 seconds.
+New submissions reuse a fresh cached quote with existing 50% headroom and caps; a cold
+or stale cache must refresh successfully. Pending transaction reconciliation always
+uses a fresh quote. A full fulfillment gas estimate validates each drand candidate and
+is reused once for its submission, removing the separate proof-only simulation. Invalid
+candidates still fall back to another endpoint; retries still estimate gas.
+
+Timestamped container logs identify WebSocket versus HTTP request discovery, beacon
+readiness, endpoint fetch/validation duration, readiness to submit, broadcast, and receipt
+completion. Endpoint URLs, signatures, private keys, and signed transaction bytes are
+not logged. Compare these stages before attributing latency to a provider or indexer.
+
+The ethers deferred contract-event filter passes an event payload to its listener.
+Live discovery extracts `event.args.requestId`; treating the payload itself as a
+request ID prevents queuing and leaves discovery to HTTP recovery. An Anvil socket
+regression checks both router-wide and consumer-filtered subscriptions before any
+HTTP recovery scan, and reproduces failure with the original callback.
+
+WebSocket closure or error causes a clean nonzero exit; Compose's `restart: unless-stopped`
+starts a new process/provider and registers subscriptions again. A stalled block stream
+while HTTP advances also triggers restart after the reconciliation interval and head-lag
+threshold. Socket monitors and periodic timers are removed during shutdown. Database close,
+contract listener removal, and both provider shutdowns are attempted even if an
+earlier cleanup fails. The database client is ended even if advisory unlock fails.
+Startup HTTP backfill recovers events from the gap; PostgreSQL retains pending work.
+The default HTTP recovery interval is 15 seconds. This is supervisor-based recovery,
+not an in-process reconnect loop. It requires the Compose restart policy.
+
+`npm run test:e2e` (after `docker build -t openvrf:local .`) also forces five
+WebSocket-only transport disconnects through a local TCP proxy. It checks automatic
+Docker recovery for both relayers, fresh subscriptions, continued HTTP access, and
+WebSocket discovery plus successful fulfillment of a subsequent ten-request burst.
+The test uses disposable Anvil wallets and PostgreSQL; it does not affect mainnet.
+
+Image publishing uses only `ghcr.io/openvrf/openvrf-relayer:latest`; do not create
+a new diagnostic/date tag for each deployment. Existing GHCR versions are not
+automatically deleted by replacing `latest`.
+
+SIGTERM, SIGINT, SIGHUP, uncaught exceptions, unhandled rejections, WebSocket
+closure/errors/stalls, and repeated poll failures share the shutdown path.
+It stops timers immediately and wakes the worker. In-flight work finishes before
+database/provider cleanup so durable transaction state is preserved. Compose
+allows two minutes for graceful shutdown. SIGKILL and OOM kills cannot execute
+JavaScript cleanup; operating-system resources are reclaimed on process exit.
+
+The Docker test also delivers SIGTERM, SIGINT and SIGHUP to the actual relayer
+process and injects uncaught exceptions and unhandled rejections through a
+test-only mounted module. Each case must complete cleanup without errors and
+restart successfully before the event-discovery/fulfillment checks.

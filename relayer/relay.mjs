@@ -13,24 +13,55 @@ export function assignedRelayer(requestId, relayers, readyAt = 0n, now = readyAt
   return relayers[Number((requestId - 1n + rotations) % BigInt(relayers.length))];
 }
 
+// Fail once on a broken socket; the container supervisor creates a fresh provider.
+export function monitorWebSocket(socket, onFailure) {
+  let failed = false;
+  const fail = () => {
+    if (failed) return;
+    failed = true;
+    onFailure();
+  };
+  socket.addEventListener('close', fail);
+  socket.addEventListener('error', fail);
+  return () => {
+    socket.removeEventListener('close', fail);
+    socket.removeEventListener('error', fail);
+  };
+}
+
+// Deferred ethers filters deliver one event payload, not positional decoded arguments.
+export function subscribeRequests(router, consumer, onRequest) {
+  return router.on(router.filters.RandomnessRequested(null, consumer ?? null), event => {
+    onRequest(BigInt(event.args.requestId));
+  });
+}
+
 export async function reconciliationHead(provider, websocketHead) {
   const httpHead = await provider.getBlockNumber();
   return {httpHead, changed: httpHead !== websocketHead, websocketBehind: httpHead > websocketHead};
 }
 
-export async function fetchSignature(round, urls, fetchFn = fetch, validate = async () => {}) {
-  for (const base of urls) {
+export async function fetchSignature(round, urls, fetchFn = fetch, validate = async () => {}, log = () => {}) {
+  for (const [index, base] of urls.entries()) {
+    const started = Date.now();
     try {
       const response = await fetchFn(`${base.replace(/\/$/, '')}/${CHAIN_HASH}/public/${round}`, {
         signal: AbortSignal.timeout(10000),
       });
-      if (!response.ok) continue;
+      if (!response.ok) { log(`Drand endpoint ${index + 1}: HTTP ${response.status} after ${Date.now() - started}ms`); continue; }
       const body = await response.json();
-      if (String(body.round) !== String(round) || !/^[0-9a-f]{128}$/i.test(body.signature)) continue;
+      if (String(body.round) !== String(round) || !/^[0-9a-f]{128}$/i.test(body.signature)) {
+        log(`Drand endpoint ${index + 1}: malformed response after ${Date.now() - started}ms`);
+        continue;
+      }
       const signature = `0x${body.signature}`;
       await validate(signature, round);
+      log(`Drand endpoint ${index + 1}: fetched and validated round ${round} in ${Date.now() - started}ms`);
       return signature;
-    } catch { /* Try the next public relay. On-chain BLS verification is authoritative. */ }
+    } catch {
+      log(`Drand endpoint ${index + 1}: fetch or validation failed after ${Date.now() - started}ms`);
+      /* Try the next public relay. On-chain BLS verification is authoritative. */
+    }
   }
   throw new Error(`No drand signature available for round ${round}`);
 }
@@ -38,7 +69,7 @@ export async function fetchSignature(round, urls, fetchFn = fetch, validate = as
 // Persist each completed log page before advancing. A small overlap makes discovery idempotent and
 // recovers events replaced by ordinary short reorganizations.
 export async function syncRequests({router, state, consumer, latestBlock, startId = 1n,
-  blockRange = 2000n, lookback = 1000n, headLag = 5n, isStopping = () => false}) {
+  blockRange = 2000n, lookback = 1000n, headLag = 5n, isStopping = () => false, onDiscover = () => {}}) {
   if (latestBlock < 0n || startId < 1n || blockRange < 1n || lookback < 0n || headLag < 0n) {
     throw new Error('Invalid index configuration');
   }
@@ -59,6 +90,7 @@ export async function syncRequests({router, state, consumer, latestBlock, startI
     const events = await router.queryFilter(filter, Number(from), Number(to));
     const ids = events.map(event => BigInt(event.args.requestId)).filter(id => id >= startId);
     await state.indexed(ids, to + 1n);
+    onDiscover(ids);
     from = to + 1n;
   }
 }
@@ -121,16 +153,25 @@ export async function relayOnce({router, state, send, now, urls, consumer, relay
       if (reason) { if (reason !== 'backoff' && reason !== 'unresolved transaction') log(`ALERT request ${id} paused: ${reason}`); continue; }
       if (relayer && state.acquireRequest &&
           !(await state.acquireRequest(id, relayer, leaseSeconds))) continue;
+      const started = Date.now();
+      log(`Processing request ${id}: beacon scheduled ${now - readyAt}s before current block timestamp`);
       const increasedRetryGas = (request.callbackGasLimit * 3n + 1n) / 2n;
       const retryGas = increasedRetryGas > 1_000_000n ? 1_000_000n : increasedRetryGas;
-      const transaction = request.fulfilled
-        ? await router.retryCallback.populateTransaction(id, retryGas)
-        : await router.fulfill.populateTransaction(id, await fetchSignature(request.round, urls, fetchFn,
-            (signature, round) => router.proveRound.staticCall(signature, round)));
+      let transaction;
+      if (request.fulfilled) {
+        transaction = await router.retryCallback.populateTransaction(id, retryGas);
+      } else {
+        await fetchSignature(request.round, urls, fetchFn, async signature => {
+          const candidate = await router.fulfill.populateTransaction(id, signature);
+          await send.prepare(candidate); // Invalid proofs fall through to the next endpoint.
+          transaction = candidate;
+        }, message => log(`Request ${id}: ${message}`));
+      }
       if (isStopping()) {
         if (relayer) await state.releaseRequest?.(id, relayer);
         break;
       }
+      log(`Request ${id}: ready to submit after ${Date.now() - started}ms preparation`);
       const result = await send(id, transaction, (request.fulfilled ? retryGas : request.callbackGasLimit) +
         (request.fulfilled ? 150000n : 600000n), request.fulfilled ? 0n : request.fee);
       if (result.paused) {

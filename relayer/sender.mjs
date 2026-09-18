@@ -15,16 +15,37 @@ async function gasQuote(provider) {
   if (price <= 0n || !block) throw new Error('Invalid gas quote');
   const base = block.baseFeePerGas ?? 0n;
   const required = price > base ? price : base;
-  return {required, buffered: required * 130n / 100n};
+  return {required, buffered: required * 150n / 100n};
+}
+
+// Quotes expire after 30 seconds; concurrent refreshes share one RPC pair.
+// Failed refreshes never extend the lifetime of an old quote.
+export function createGasPriceCache(provider, {ttlMs = 30000, now = Date.now} = {}) {
+  let quote, updatedAt, inFlight;
+  const refresh = () => {
+    if (!inFlight) {
+      inFlight = gasQuote(provider).then(value => {
+        quote = value;
+        updatedAt = now();
+        return value;
+      }).finally(() => { inFlight = undefined; });
+    }
+    return inFlight;
+  };
+  return {refresh, get: () => quote && now() - updatedAt < ttlMs
+    ? Promise.resolve(quote) : refresh()};
 }
 
 export function boundedSender({wallet, provider, state, maxGasPrice, receiptTimeoutMs = 60000,
-  confirmations = 2}) {
-  return async (id, transaction, gasFloor, reimbursementWei = 0n) => {
-    const gasPrice = (await gasQuote(provider)).buffered;
+  confirmations = 2, gasPrices = createGasPriceCache(provider), log = console.log}) {
+  const preflightEstimates = new WeakMap();
+  const send = async (id, transaction, gasFloor, reimbursementWei = 0n) => {
+    const gasPrice = (await gasPrices.get()).buffered;
     if (gasPrice <= 0n || gasPrice > maxGasPrice) return {paused: 'gas price cap'};
     if (BigInt(transaction.value ?? 0) !== 0n) throw new Error('Unexpected transaction value');
-    const estimate = await provider.estimateGas({...transaction, from: wallet.address});
+    const estimate = preflightEstimates.get(transaction) ??
+      await provider.estimateGas({...transaction, from: wallet.address});
+    preflightEstimates.delete(transaction);
     const buffered = estimate * 13n / 10n + 30000n;
     const gasLimit = buffered > gasFloor ? buffered : gasFloor;
     const populated = await wallet.populateTransaction({...transaction, gasLimit, gasPrice, type: 0});
@@ -35,9 +56,11 @@ export function boundedSender({wallet, provider, state, maxGasPrice, receiptTime
     if (paused) return {paused};
     // Broadcast errors are ambiguous: the RPC may have accepted the transaction before the
     // connection failed. Keep the exact signed bytes so reconciliation can safely rebroadcast it.
+    log(`Submitting request ${id}: ${hash}`);
     try {
       await provider.broadcastTransaction(signed);
       await state.broadcasted(hash);
+      log(`Broadcast request ${id}: ${hash}`);
     } catch (error) {
       return {hash, pending: true, reason: rejectionReason(error)};
     }
@@ -46,6 +69,13 @@ export function boundedSender({wallet, provider, state, maxGasPrice, receiptTime
     await state.confirmed(hash, receipt.status);
     return {hash, status: receipt.status};
   };
+  // Full fulfillment estimation validates the proof and supplies the submission gas limit.
+  // Reuse it once for this exact populated transaction instead of verifying the proof twice.
+  send.prepare = async transaction => {
+    const estimate = await provider.estimateGas({...transaction, from: wallet.address});
+    preflightEstimates.set(transaction, estimate);
+  };
+  return send;
 }
 
 // Unresolved transaction

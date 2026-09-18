@@ -12,6 +12,8 @@ import {
 } from 'ethers';
 import {
     relayOnce,
+    subscribeRequests,
+    monitorWebSocket,
     reconciliationHead,
     syncRequests,
     pruneCompletedRequests,
@@ -19,7 +21,7 @@ import {
     MULTICALL3_ADDRESS,
 } from './relay.mjs';
 import { openRelayState } from './state.mjs';
-import { boundedSender, reconcilePending } from './sender.mjs';
+import { boundedSender, reconcilePending, createGasPriceCache } from './sender.mjs';
 
 // A node-postgres Client never reconnects after its connection dies: every database read then
 // rejects on every poll while the process stays alive, so Docker's restart policy never fires.
@@ -29,24 +31,29 @@ const MAX_CONSECUTIVE_POLL_FAILURES = 5;
 let provider,
     wsProvider,
     wsRouter,
+    stopSocketMonitor,
     state,
     reconcileTimer,
+    gasPriceTimer,
     wakeRelayer,
     fatalError,
     stopping = false;
-for (const signal of ['SIGTERM', 'SIGINT'])
-    process.on(signal, () => {
-        stopping = true;
-        wakeRelayer?.();
-    });
-// Last-resort handlers request an orderly shutdown. Normal RPC/request failures are handled locally;
-// an uncaught error is not considered safe to ignore and the process exits nonzero after cleanup.
+// All shutdown causes stop scheduling immediately and share the final cleanup path.
+function requestStop(error) {
+    if (error) {
+        fatalError ??= error instanceof Error ? error : new Error(String(error));
+        process.exitCode = 1;
+    }
+    stopping = true;
+    if (reconcileTimer) clearInterval(reconcileTimer);
+    if (gasPriceTimer) clearInterval(gasPriceTimer);
+    stopSocketMonitor?.();
+    wakeRelayer?.();
+}
+for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'])
+    process.on(signal, () => requestStop());
 for (const event of ['uncaughtException', 'unhandledRejection'])
-    process.on(event, (error) => {
-        fatalError = error instanceof Error ? error : new Error(String(error));
-        stopping = true;
-        wakeRelayer?.();
-    });
+    process.on(event, error => requestStop(error instanceof Error ? error : new Error(String(error))));
 try {
     const env = process.env;
     // Router-wide mode discovers newly authorized campaigns without restarting the worker
@@ -81,7 +88,6 @@ try {
             'function authorizedRelayers(address) view returns (bool)',
             'function nextRequestId() view returns (uint256)',
             'function requests(uint256) view returns (address consumer,uint64 round,uint32 callbackGasLimit,bool fulfilled,bool delivered,uint256 randomWord,uint256 fee)',
-            'function proveRound(bytes,uint64)',
             'function fulfill(uint256,bytes)',
             'function retryCallback(uint256,uint32)',
             'event RandomnessRequested(uint256 indexed requestId,address indexed consumer,uint64 round)',
@@ -91,6 +97,11 @@ try {
     if (env.WS_URL) {
         wsProvider = new WebSocketProvider(env.WS_URL, network.chainId, { staticNetwork: true });
         wsRouter = new Contract(env.ROUTER_ADDRESS, router.interface, wsProvider);
+        stopSocketMonitor = monitorWebSocket(wsProvider.websocket, () => {
+            if (stopping) return;
+            console.error('WebSocket closed or failed; restarting with durable HTTP recovery');
+            requestStop(new Error('WebSocket connection failed'));
+        });
     }
     if ((await router.CHAIN_HASH()) !== `0x${CHAIN_HASH}`) throw new Error('Beacon mismatch');
     if (consumer && !(await router.authorizedConsumers(consumer)))
@@ -121,7 +132,7 @@ try {
     const blockRange = BigInt(env.EVENT_BLOCK_RANGE ?? '2000');
     const lookback = BigInt(env.REORG_LOOKBACK_BLOCKS ?? '1000');
     const headLag = BigInt(env.RECONCILE_HEAD_LAG_BLOCKS ?? '5');
-    const reconcileMs = Number(env.RECONCILE_SECONDS ?? '30') * 1000;
+    const reconcileMs = Number(env.RECONCILE_SECONDS ?? '15') * 1000;
     const receiptTimeoutMs = Number(env.RECEIPT_TIMEOUT_SECONDS ?? '60') * 1000;
     const confirmations = Number(env.RECEIPT_CONFIRMATIONS ?? '2');
     const maxRebroadcasts = Number(env.MAX_REBROADCASTS ?? '5');
@@ -217,13 +228,27 @@ try {
         return result.resolved;
     };
     if (state.data.pending) await reconcileTransaction();
-    const send = boundedSender({ wallet, provider, state, maxGasPrice, receiptTimeoutMs, confirmations });
+    const gasPrices = createGasPriceCache(provider);
+    await gasPrices.refresh();
+    gasPriceTimer = setInterval(() => {
+        if (stopping) return;
+        gasPrices.refresh().catch(() => console.error('Gas price refresh failed; stale quotes require a fresh query before submission'));
+    }, 30000);
+    const send = boundedSender({ wallet, provider, state, maxGasPrice, receiptTimeoutMs, confirmations, gasPrices });
     const urls = (env.DRAND_URLS ?? 'https://api.drand.sh,https://api2.drand.sh,https://api3.drand.sh')
         .split(',')
         .map((url) => url.trim());
     const latestBlock = await provider.getBlock('latest');
     let latestBlockNumber = latestBlock.number;
     let lastWebsocketBlockAt = Date.now();
+    let highestDiscovered = 0n;
+    const reportDiscovery = (ids, source) => {
+        for (const id of [...ids].sort((a, b) => a < b ? -1 : a > b ? 1 : 0)) {
+            if (id <= highestDiscovered && source !== 'WebSocket') continue;
+            if (id > highestDiscovered) highestDiscovered = id;
+            console.log(`Discovered request ${id} via ${source}`);
+        }
+    };
     await syncRequests({
         router,
         state,
@@ -233,6 +258,7 @@ try {
         blockRange: startupBlockRange,
         lookback,
         headLag,
+        onDiscover: ids => reportDiscovery(ids, 'startup HTTP scan'),
     });
     const multicall = new Contract(
         MULTICALL3_ADDRESS,
@@ -287,12 +313,15 @@ try {
     wakeRelayer = notify;
     if (wsProvider && wsRouter) {
         wsProvider.on('block', (blockNumber) => {
+            if (stopping) return;
             lastWebsocketBlockAt = Date.now();
             latestBlockNumber = blockNumber;
             blockAdvanced = true;
             notify();
         });
-        wsRouter.on(wsRouter.filters.RandomnessRequested(null, consumer ?? null), (requestId) => {
+        await subscribeRequests(wsRouter, consumer, (requestId) => {
+            if (stopping) return;
+            reportDiscovery([BigInt(requestId)], 'WebSocket');
             queuedIds.push(BigInt(requestId));
             notify();
         });
@@ -320,9 +349,8 @@ try {
                     if (wsProvider && head.websocketBehind &&
                         Date.now() - lastWebsocketBlockAt >= reconcileMs &&
                         head.httpHead - websocketHead > Number(headLag)) {
-                        console.error(
-                            `ALERT WebSocket head ${websocketHead} behind HTTP head ${head.httpHead}; reconciling missed blocks`,
-                        );
+                        console.error('WebSocket block subscription stalled while HTTP advanced; restarting');
+                        requestStop(new Error('WebSocket subscription stalled'));
                     }
                     latestBlockNumber = head.httpHead;
                     blockAdvanced = true;
@@ -337,8 +365,10 @@ try {
                     lookback,
                     headLag,
                     isStopping: () => stopping,
+                    onDiscover: ids => reportDiscovery(ids, 'HTTP recovery scan'),
                 });
                 lastReconcile = Date.now();
+                if (stopping) break;
             }
             if (blockAdvanced && state.requestIds().length) {
                 blockAdvanced = false;
@@ -366,8 +396,7 @@ try {
                 console.error(
                     `ALERT ${MAX_CONSECUTIVE_POLL_FAILURES} consecutive poll failures; stopping so the orchestrator starts a fresh worker`,
                 );
-                fatalError = error instanceof Error ? error : new Error(String(error));
-                stopping = true;
+                requestStop(error);
             }
         }
         if (!stopping) await waitForWake();
@@ -380,9 +409,16 @@ try {
     );
     process.exitCode = 1;
 } finally {
-    if (reconcileTimer) clearInterval(reconcileTimer);
-    if (state) await state.close();
-    if (wsRouter) await wsRouter.removeAllListeners();
-    if (wsProvider) await wsProvider.destroy();
-    if (provider) provider.destroy();
+    requestStop();
+    // Attempt every cleanup even if an earlier resource is already broken.
+    for (const cleanup of [
+        () => state?.close(),
+        () => wsRouter?.removeAllListeners(),
+        () => wsProvider?.destroy(),
+        () => provider?.destroy(),
+    ]) {
+        try { await cleanup(); }
+        catch { console.error('Resource cleanup failed during shutdown'); process.exitCode = 1; }
+    }
+    console.log('Relayer shutdown cleanup completed');
 }

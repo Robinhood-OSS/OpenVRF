@@ -127,7 +127,7 @@ beacon publication. The game must not permit outcome-dependent replacement of a 
 `relayer/main.mjs` validates chain ID, beacon hash, consumer authorization, relayer authorization
 and configured addresses, then loads its local signer. WebSocket subscriptions deliver new blocks
 and `RandomnessRequested` events without one-second HTTP polling. It also backfills event logs in
-bounded block ranges at startup and every 30 seconds, using larger 100,000-block pages on startup
+bounded block ranges at startup and every 15 seconds, using larger 100,000-block pages on startup
 and persisting the next block before processing its pending set. Startup batches historical request
 state reads through the canonical Multicall3 contract and retains failed subcalls for individual
 verification. If Multicall3 is unavailable, the same individual checks remain authoritative. Each
@@ -138,7 +138,7 @@ It skips completed requests and other consumers. For pending requests it fetches
 for an already fulfilled request it retries the callback with a 50%-increased gas allowance,
 capped at 1,000,000.
 `START_BLOCK` begins historical event discovery and should be the router deployment block;
-`START_REQUEST_ID` is an optional lower request-ID filter. Every 30 seconds, reconciliation scans
+`START_REQUEST_ID` is an optional lower request-ID filter. Every 15 seconds, reconciliation scans
 the previous 1,000-block window except the newest five blocks, which remain owned by the live
 listener. Missed events enter reconciliation after aging beyond that lag. Discoveries are also
 deduplicated by request ID and processed serially. PostgreSQL persists the cursor,
@@ -147,16 +147,21 @@ pending-transaction recovery record; on-chain storage remains authoritative for 
 and delivery. Completed per-request accounting is compacted into the lifetime spend total. Successful paid fulfillments renew
 the operating allowance without erasing gross authorized-spend history.
 
-HTTP errors, missing fields, incorrect round/length and rejection by `proveRound.staticCall`
+HTTP errors, missing fields, incorrect round/length and rejection by full fulfillment gas estimation
 trigger API fallback before a paid submission. This preflight relies on the configured RPC;
 the actual transaction still verifies the signature on-chain.
 
-The sender estimates gas, applies a gas-price ceiling and durably reserves the transaction's
+The valid candidate’s full gas estimate is reused once for submission; the separate
+proof-only simulation is omitted. Callback retries still estimate gas. Gas prices refresh
+in the background every 30 seconds, retain 50% headroom over the greater of the RPC
+quote and current base fee, and expire after 30 seconds. An unavailable or expired
+cache requires a successful fresh query before spending. Pending fee recovery always
+uses a fresh quote. The sender applies a gas-price ceiling and durably reserves the transaction's
 maximum gas cost before broadcasting. Reservations are never refunded, including unused gas.
 The per-request cap and renewable unreimbursed-operating cap apply alongside persisted attempt limits and exponential
 backoff. A 60-second receipt timeout or ambiguous broadcast durably retains the signed bytes, hash,
 nonce, and submission state. The process continues monitoring but blocks new spending from that
-signer until reconciliation resolves the transaction. On startup and every 30 seconds, it checks
+signer until reconciliation resolves the transaction. On startup and every 15 seconds, it checks
 the receipt and mempool. If the transaction is absent and its nonce remains unused, it rebroadcasts
 the identical signed bytes with persisted exponential backoff. A confirmation-safe consumed nonce
 retires the impossible old transaction; an unexpected nonce gap or exhausted rebroadcast limit
