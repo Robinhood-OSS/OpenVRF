@@ -17,6 +17,56 @@ Run each command block separately. Replace uppercase placeholder values before r
 commands. Never enter a private key as a command argument or put credentials in Git.
 Do not publish environment files, private keys or deployment broadcast records.
 
+## Contract-only deployment shortcut
+
+If your server is already configured, use the script below from the repository root.
+It deploys only the current `OpenVRF` router, optionally authorizes the existing
+`CONSUMER_ADDRESS`, and verifies the initial relayer authorization supplied by the
+router constructor. It retains ownership and updates the local `.env` router address
+and deployment block. It does not deploy a consumer.
+
+Set these entries in your existing `.env` (owner and deployer must be the same wallet):
+
+```dotenv
+CHAIN_ID=4663
+DEPLOYER_ACCOUNT=openvrf-mainnet-deployer
+DEPLOYER_ADDRESS=0xYOUR_DEPLOYER_WALLET_ADDRESS
+OWNER_ADDRESS=0xYOUR_DEPLOYER_WALLET_ADDRESS
+RELAYER_ADDRESS=0xYOUR_EXISTING_RELAYER_WALLET_ADDRESS
+REQUEST_FEE_WEI=0
+# Optional existing consumer contract to whitelist; leave empty to skip.
+CONSUMER_ADDRESS=
+```
+
+Keep your configured `RPC_URL`. With Node.js 22+ and Foundry installed:
+
+```sh
+npm ci
+# Simulation: no transactions are sent.
+npm run deploy:mainnet
+# Deployment: unlock the existing Foundry keystore when prompted.
+npm run deploy:mainnet -- --broadcast
+```
+
+The deployment prints `ROUTER_ADDRESS` and `START_BLOCK` and saves
+`deployments/mainnet-<router-address>.json`. The local `.env` is backed up before those
+two entries are updated. Use the saved deployment address if later verification
+fails; inspect `broadcast/DeployConfigured.s.sol/4663/` before retrying a failed broadcast.
+This is a fresh deployment on every broadcast run, not a resumable migration command.
+
+The script authorizes `RELAYER_ADDRESS`; it does not configure a multi-wallet
+`RELAYER_ADDRESSES` list. Authorize any additional relayers separately as owner.
+It does not drain old requests or disable the previous router: finish those requests
+before switching your service (see section 3 below). Update just the two printed
+entries on your server and recreate the relayer container; the script does not access
+the server. Explorer verification remains a separate step in section 6.
+
+Whitelisting an existing consumer does not update its router binding. In particular,
+your old `ExampleConsumer` has an immutable router and will keep calling the old router.
+Testing the new router with `ExampleConsumer` requires a separate new consumer deployment
+(section 7), which this shortcut intentionally does not perform. Its `request()` is public;
+disable that consumer after testing if you do not want to sponsor arbitrary callers.
+
 ## 1. Prepare on your Mac
 
 Open the local repository root. Foundry, Node.js 22+, Python 3 and your existing

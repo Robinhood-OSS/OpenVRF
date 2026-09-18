@@ -445,7 +445,7 @@ and [pinned verifier source](https://github.com/randa-mu/bls-solidity/tree/11af1
 - [Fairness and independent verification](docs/fairness.md) — what the checker proves and does not prove
 - [Architecture](docs/architecture.md) — components, trust boundaries, sequence, and state diagrams
 - [Operator runbook](docs/runbook.md) — deployment, signer setup, limits, and recovery
-- [Robinhood mainnet deployment](docs/mainnet-deployment.md) — copy-and-paste router redeployment, consumer setup, and Docker relayer migration
+- [Robinhood mainnet deployment](docs/mainnet-deployment.md) — includes a contract-only `npm run deploy:mainnet -- --broadcast` shortcut using `.env`
 - [Security status](docs/security-status.md) — completed checks and remaining assurance gaps
 - [Distribution diagnostics](docs/distribution-check.md) — reproducible uniformity checks over local and historical samples
 - [Timing model](docs/timing-model.md) — commitment timing and provider-design comparisons
