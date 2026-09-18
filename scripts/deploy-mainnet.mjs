@@ -1,10 +1,13 @@
 import {spawnSync} from 'node:child_process';
+import {parseEnv} from 'node:util';
 import {readFileSync, writeFileSync, renameSync, copyFileSync, chmodSync, mkdirSync, statSync} from 'node:fs';
 import {Contract, getAddress, JsonRpcProvider, ZeroAddress} from 'ethers';
 
 // Run from the repository root with Node's --env-file=.env. Wallet keys remain in Foundry's keystore.
+// Prefer the current file over stale variables exported by a previous shell session.
+Object.assign(process.env, parseEnv(readFileSync('.env', 'utf8')));
 const broadcast = process.argv.includes('--broadcast');
-if (process.argv.slice(2).some(arg => arg !== '--broadcast')) throw new Error('Usage: npm run deploy:mainnet -- [--broadcast]');
+if (process.argv.slice(2).filter(arg => arg !== '--').some(arg => arg !== '--broadcast')) throw new Error('Usage: npm run deploy:mainnet -- [--broadcast]');
 const required = name => {
   if (!process.env[name]) throw new Error(`Set ${name} in .env`);
   return process.env[name];

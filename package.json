@@ -6,6 +6,7 @@
   "type": "module",
   "engines": {"node": ">=22"},
   "scripts": {
+    "deploy:mainnet:example": "node --env-file=.env scripts/deploy-mainnet-with-example.mjs",
     "deploy:mainnet": "node --env-file=.env scripts/deploy-mainnet.mjs",
     "relay": "node relayer/main.mjs",
     "test": "node --test relayer/*.test.mjs scripts/verify-request.test.mjs",

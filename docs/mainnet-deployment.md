@@ -17,55 +17,12 @@ Run each command block separately. Replace uppercase placeholder values before r
 commands. Never enter a private key as a command argument or put credentials in Git.
 Do not publish environment files, private keys or deployment broadcast records.
 
-## Contract-only deployment shortcut
+## Deployment flow
 
-If your server is already configured, use the script below from the repository root.
-It deploys only the current `OpenVRF` router, optionally authorizes the existing
-`CONSUMER_ADDRESS`, and verifies the initial relayer authorization supplied by the
-router constructor. It retains ownership and updates the local `.env` router address
-and deployment block. It does not deploy a consumer.
-
-Set these entries in your existing `.env` (owner and deployer must be the same wallet):
-
-```dotenv
-CHAIN_ID=4663
-DEPLOYER_ACCOUNT=openvrf-mainnet-deployer
-DEPLOYER_ADDRESS=0xYOUR_DEPLOYER_WALLET_ADDRESS
-OWNER_ADDRESS=0xYOUR_DEPLOYER_WALLET_ADDRESS
-RELAYER_ADDRESS=0xYOUR_EXISTING_RELAYER_WALLET_ADDRESS
-REQUEST_FEE_WEI=0
-# Optional existing consumer contract to whitelist; leave empty to skip.
-CONSUMER_ADDRESS=
-```
-
-Keep your configured `RPC_URL`. With Node.js 22+ and Foundry installed:
-
-```sh
-npm ci
-# Simulation: no transactions are sent.
-npm run deploy:mainnet
-# Deployment: unlock the existing Foundry keystore when prompted.
-npm run deploy:mainnet -- --broadcast
-```
-
-The deployment prints `ROUTER_ADDRESS` and `START_BLOCK` and saves
-`deployments/mainnet-<router-address>.json`. The local `.env` is backed up before those
-two entries are updated. Use the saved deployment address if later verification
-fails; inspect `broadcast/DeployConfigured.s.sol/4663/` before retrying a failed broadcast.
-This is a fresh deployment on every broadcast run, not a resumable migration command.
-
-The script authorizes `RELAYER_ADDRESS`; it does not configure a multi-wallet
-`RELAYER_ADDRESSES` list. Authorize any additional relayers separately as owner.
-It does not drain old requests or disable the previous router: finish those requests
-before switching your service (see section 3 below). Update just the two printed
-entries on your server and recreate the relayer container; the script does not access
-the server. Explorer verification remains a separate step in section 6.
-
-Whitelisting an existing consumer does not update its router binding. In particular,
-your old `ExampleConsumer` has an immutable router and will keep calling the old router.
-Testing the new router with `ExampleConsumer` requires a separate new consumer deployment
-(section 7), which this shortcut intentionally does not perform. Its `request()` is public;
-disable that consumer after testing if you do not want to sponsor arbitrary callers.
+Deploy OpenVRF first with `pnpm run deploy:mainnet`. Then deploy only ExampleConsumer
+against that existing router with `pnpm run deploy:mainnet:example`.
+**The example script never deploys OpenVRF.** Ownership is retained throughout.
+Neither script sends a randomness request or accesses the server.
 
 ## 1. Prepare on your Mac
 
@@ -73,10 +30,12 @@ Open the local repository root. Foundry, Node.js 22+, Python 3 and your existing
 Foundry account `openvrf-mainnet-deployer` must be available.
 
 ```sh
-cd /path/to/openvrf
+cd /Users/lucas/Code/openvrf
+git submodule update --init --recursive
+pnpm install
 forge build
 forge test
-npm test
+pnpm test
 rg 'MIN_DELAY =' src/OpenVRF.sol
 ```
 
@@ -86,12 +45,8 @@ Expected source setting:
 uint256 public constant MIN_DELAY = 2;
 ```
 
-If dependencies are not installed yet:
-
-```sh
-git submodule update --init --recursive
-npm ci --ignore-scripts
-```
+Keep `package-lock.json`: the Docker image still uses `npm ci`. Local pnpm use
+does not require changing the image or package manager used in Docker.
 
 ## 2. Configure the local .env
 
@@ -113,6 +68,7 @@ RPC_URL=https://YOUR_PRODUCTION_MAINNET_HTTP_RPC
 WS_URL=wss://YOUR_PRODUCTION_MAINNET_WEBSOCKET_RPC
 CHAIN_ID=4663
 
+DEPLOYER_ACCOUNT=openvrf-mainnet-deployer
 DEPLOYER_ADDRESS=0xYOUR_DEPLOYER_WALLET_ADDRESS
 OWNER_ADDRESS=0xYOUR_DEPLOYER_WALLET_ADDRESS
 RELAYER_ADDRESS=0xYOUR_EXISTING_RELAYER_WALLET_ADDRESS
@@ -121,6 +77,10 @@ REQUEST_FEE_WEI=0
 OLD_ROUTER_ADDRESS=0xYOUR_OLD_ROUTER_ADDRESS
 OLD_CONSUMER_ADDRESS=0xYOUR_OLD_EXAMPLE_CONSUMER_ADDRESS
 ```
+
+Set `OWNER_ADDRESS` to the same address as `DEPLOYER_ADDRESS`; the script needs
+owner authority to whitelist the newly deployed consumer. The script loads `.env`
+automatically with Node.js; no `export` is required for deployment.
 
 Retain ownership if you need to add future PowerPot consumers. The owner may be
 transferred to a multisig later. Do not renounce ownership or use a burn address
@@ -204,166 +164,124 @@ docker compose logs --tail=50 relayer
 Return to your Mac terminal for deployment. Do not delete PostgreSQL rows or its
 volume to clear pending work.
 
-## 4. Deploy the new router from your Mac
+## 4. Deploy only OpenVRF from your Mac
 
-The script reads `OWNER_ADDRESS`, `RELAYER_ADDRESS` and `REQUEST_FEE_WEI` from the
-loaded environment. The constructor authorizes the initial relayer automatically.
-
-Simulate first:
+For a new router, clear the local `CONSUMER_ADDRESS` first; the old example is bound
+to the old router and should not be whitelisted on this new router.
 
 ```sh
-forge script script/Deploy.s.sol:Deploy \
-  --rpc-url "$RPC_URL" \
-  --account openvrf-mainnet-deployer \
-  --sender "$DEPLOYER_ADDRESS"
+pnpm run deploy:mainnet
+# After reviewing the simulation, deploy only OpenVRF:
+pnpm run deploy:mainnet -- --broadcast
 ```
 
-Review the simulation, then submit:
+Enter the Foundry keystore password when prompted. The constructor authorizes
+`RELAYER_ADDRESS`. The script checks owner, fee, `MIN_DELAY=2`, and authorization,
+saves `deployments/mainnet-<router-address>.json`, backs up `.env`, and updates
+`ROUTER_ADDRESS` and `START_BLOCK`. It retains ownership.
+
+**If OpenVRF is already deployed, skip this step.** Use its address in `.env`.
+Each router broadcast invocation deploys a fresh router. Inspect
+`broadcast/DeployConfigured.s.sol/4663/run-latest.json` before retrying a failed run:
+transactions may already have mined.
+
+## 5. Deploy only ExampleConsumer against the existing router
+
+Check that the local `.env` contains the router you want to use. This script requires
+`DEPLOYER_ADDRESS` to be the existing router's owner so it can whitelist the consumer.
+It loads `.env` automatically and uses the existing Foundry account. Both deployment
+scripts explicitly prefer the current `.env` contents over previously exported shell
+variables, so an old `source .env` session cannot override the configured router.
 
 ```sh
-forge script script/Deploy.s.sol:Deploy \
-  --rpc-url "$RPC_URL" \
-  --account openvrf-mainnet-deployer \
-  --sender "$DEPLOYER_ADDRESS" \
-  --broadcast
+pnpm run deploy:mainnet:example
+# After reviewing the simulation, deploy only the consumer and whitelist it:
+pnpm run deploy:mainnet:example -- --broadcast
 ```
 
-Enter the existing encrypted keystore password when prompted. If submission
-times out, inspect the original transaction before repeating deployment.
+This creates **one ExampleConsumer**, pointing to `ROUTER_ADDRESS`, and calls
+`setConsumerAuthorization(newConsumer, true)` on that existing router. It verifies
+the consumer's router binding and authorization, saves
+`deployments/example-<consumer-address>.json`, backs up `.env`, and updates **only
+`CONSUMER_ADDRESS`**. `ROUTER_ADDRESS` and `START_BLOCK` remain unchanged. It does
+not change the relayer whitelist or deploy another OpenVRF.
 
-Display the address, transaction hash and deployment block from this broadcast:
+If a usable ExampleConsumer is already deployed against your chosen router, skip
+this deployment too and use its address. Each consumer broadcast invocation creates
+a fresh consumer. On failure, inspect
+`broadcast/DeployWithExample.s.sol/4663/run-latest.json` before retrying.
 
-```sh
-python3 - <<'PY'
-import json
-from pathlib import Path
-
-path = Path("broadcast/Deploy.s.sol/4663/run-latest.json")
-data = json.loads(path.read_text())
-for tx in data["transactions"]:
-    if tx.get("contractName") != "OpenVRF":
-        continue
-    print("ROUTER_ADDRESS=" + tx["contractAddress"])
-    print("ROUTER_DEPLOY_TX=" + tx["hash"])
-    for receipt in data.get("receipts", []):
-        if receipt.get("transactionHash", "").lower() == tx["hash"].lower():
-            block = receipt["blockNumber"]
-            block = int(block, 16) if isinstance(block, str) and block.startswith("0x") else int(block)
-            print("START_BLOCK=" + str(block))
-PY
-```
-
-Use the record from this deployment, not an older broadcast.
-
-## 5. Record and validate the new router
-
-Edit the local `.env`:
-
-```sh
-nano .env
-```
-
-Replace the router/block entries and add its deployment transaction:
-
-```dotenv
-ROUTER_ADDRESS=0xNEW_ROUTER_ADDRESS
-ROUTER_DEPLOY_TX=0xNEW_ROUTER_DEPLOYMENT_TRANSACTION_HASH
-START_BLOCK=NEW_ROUTER_DEPLOYMENT_BLOCK
-```
-
-Reload and inspect:
+Reload the updated values for subsequent `cast` commands:
 
 ```sh
 set -a
 source ./.env
 set +a
-
-cast receipt "$ROUTER_DEPLOY_TX" --rpc-url "$RPC_URL"
-cast call "$ROUTER_ADDRESS" "MIN_DELAY()(uint256)" --rpc-url "$RPC_URL"
-cast call "$ROUTER_ADDRESS" "owner()(address)" --rpc-url "$RPC_URL"
-cast call "$ROUTER_ADDRESS" \
-  "authorizedRelayers(address)(bool)" "$RELAYER_ADDRESS" --rpc-url "$RPC_URL"
-cast call "$ROUTER_ADDRESS" "requestFee()(uint256)" --rpc-url "$RPC_URL"
 ```
 
-Expect a successful receipt, `MIN_DELAY = 2`, your initial owner, relayer
-authorization `true`, and your configured request fee.
+## 6. Verify the contracts in the explorer
 
-## 6. Verify the router source
+The consumer script automatically generates:
 
-Use the original constructor values from this deployment, even if administration
-changes later.
+- `deployments/ExampleConsumer.standard-input.json`
+- `deployments/ExampleConsumer.constructor-args.txt`
 
-```sh
-forge verify-contract \
-  "$ROUTER_ADDRESS" src/OpenVRF.sol:OpenVRF \
-  --chain "$CHAIN_ID" \
-  --verifier blockscout \
-  --verifier-url https://robinhoodchain.blockscout.com/api/ \
-  --skip-is-verified-check \
-  --constructor-args "$(cast abi-encode \
-    'constructor(address,address,uint256)' \
-    "$OWNER_ADDRESS" "$RELAYER_ADDRESS" "$REQUEST_FEE_WEI")" \
-  --watch
-```
-
-If Cloudflare returns challenge HTML, generate Standard JSON for browser verification:
+The router-only script saves a deployment record, not explorer input. Generate the
+router's verification files separately using the original constructor values:
 
 ```sh
 mkdir -p deployments
-forge verify-contract \
-  "$ROUTER_ADDRESS" src/OpenVRF.sol:OpenVRF \
-  --chain "$CHAIN_ID" \
-  --show-standard-json-input \
+forge verify-contract "$ROUTER_ADDRESS" src/OpenVRF.sol:OpenVRF \
+  --chain 4663 --show-standard-json-input \
   > deployments/OpenVRF.standard-input.json
 
+cast abi-encode 'constructor(address,address,uint256)' \
+  "$OWNER_ADDRESS" "$RELAYER_ADDRESS" "${REQUEST_FEE_WEI:-0}" \
+  > deployments/OpenVRF.constructor-args.txt
+
 python3 -m json.tool deployments/OpenVRF.standard-input.json > /dev/null
+python3 -m json.tool deployments/ExampleConsumer.standard-input.json > /dev/null
 ```
 
-Open the new address at `https://robinhoodchain.blockscout.com/address/NEW_ROUTER_ADDRESS`.
-Choose **Verify & Publish → Solidity Standard JSON Input**. Upload the generated
-file, choose compiler `v0.8.28+commit.7893614a`, and select
-`src/OpenVRF.sol:OpenVRF` / `OpenVRF` if requested. Supply the encoded original
-constructor arguments if requested. The JSON includes dependencies and compiler settings.
+Use the router deployment manifest's original owner, relayer, and fee if these
+settings have changed. For each new address, open
+`https://robinhoodchain.blockscout.com/address/ADDRESS`, choose **Verify & Publish →
+Solidity Standard JSON Input**, and upload the matching `.standard-input.json`.
+Select compiler `v0.8.28+commit.7893614a` and the matching contract:
 
-## 7. Deploy and authorize a new demonstration consumer
+- Router: `src/OpenVRF.sol:OpenVRF`.
+- Consumer: `src/ExampleConsumer.sol:ExampleConsumer`.
+
+If constructor arguments are requested, copy the corresponding `.constructor-args.txt`.
+Verification inputs contain source dependencies and compiler settings; the scripts
+do not submit explorer verification. Keep the files for this deployment, as later
+runs reuse the verification file names.
+
+If consumer verification generation failed after deployment, regenerate without
+sending any deployment transactions:
 
 ```sh
-forge create src/ExampleConsumer.sol:ExampleConsumer \
-  --rpc-url "$RPC_URL" \
-  --account openvrf-mainnet-deployer \
-  --broadcast \
-  --constructor-args "$ROUTER_ADDRESS"
+forge verify-contract "$CONSUMER_ADDRESS" src/ExampleConsumer.sol:ExampleConsumer \
+  --chain 4663 --show-standard-json-input \
+  > deployments/ExampleConsumer.standard-input.json
+cast abi-encode 'constructor(address)' "$ROUTER_ADDRESS" \
+  > deployments/ExampleConsumer.constructor-args.txt
 ```
 
-Put the `Deployed to` address into the local `.env`:
-
-```dotenv
-CONSUMER_ADDRESS=0xNEW_EXAMPLE_CONSUMER_ADDRESS
-```
-
-Reload, check the router binding, authorize the consumer and confirm authorization:
+## 7. Confirm the consumer and relayer
 
 ```sh
-set -a
-source ./.env
-set +a
-
 cast call "$CONSUMER_ADDRESS" "randomnessRouter()(address)" --rpc-url "$RPC_URL"
-
-cast send "$ROUTER_ADDRESS" \
-  "setConsumerAuthorization(address,bool)" "$CONSUMER_ADDRESS" true \
-  --rpc-url "$RPC_URL" \
-  --account openvrf-mainnet-deployer
-
 cast call "$ROUTER_ADDRESS" \
   "authorizedConsumers(address)(bool)" "$CONSUMER_ADDRESS" --rpc-url "$RPC_URL"
+cast call "$ROUTER_ADDRESS" \
+  "authorizedRelayers(address)(bool)" "$RELAYER_ADDRESS" --rpc-url "$RPC_URL"
 ```
 
-The binding must equal the new router and authorization must be `true`.
-This consumer exposes public requests and is for a bounded smoke test. Production
-PowerPot consumers need application-specific admission control, request/action binding
-and their own deployment or router configuration procedure.
+Expect your chosen router address and `true` for both authorizations. The router
+script authorizes only `RELAYER_ADDRESS`; authorize any additional relayer wallets
+separately. The example's `request()` is public; disable it after the bounded test
+if you do not want to sponsor arbitrary callers.
 
 ## 8. Switch the existing server
 
@@ -390,7 +308,9 @@ CONSUMER_ADDRESS=
 
 Keep the existing database password, RPC endpoints, relayer settings and key.
 Do not overwrite the server configuration with the whole Mac `.env`.
-In router-wide mode, `CONSUMER_ADDRESS` is not needed by the service; it is still
+If you keep `RELAY_ALL_CONSUMERS=false` instead, set the server
+`CONSUMER_ADDRESS` to the newly printed consumer address. In router-wide mode,
+`CONSUMER_ADDRESS` is not needed by the service; it is still
 useful locally as the destination of manual test calls.
 
 The existing `docker-compose.yml` must reference the prebuilt image, with no `build:`:
