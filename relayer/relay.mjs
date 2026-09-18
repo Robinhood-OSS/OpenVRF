@@ -118,7 +118,7 @@ export async function relayOnce({router, state, send, now, urls, consumer, relay
       if (relayer && relayers &&
           assignedRelayer(id, relayers, readyAt, now, failoverSeconds) !== relayer) continue;
       const reason = state.reason(id);
-      if (reason) { if (reason !== 'backoff') log(`ALERT request ${id} paused: ${reason}`); continue; }
+      if (reason) { if (reason !== 'backoff' && reason !== 'unresolved transaction') log(`ALERT request ${id} paused: ${reason}`); continue; }
       if (relayer && state.acquireRequest &&
           !(await state.acquireRequest(id, relayer, leaseSeconds))) continue;
       const increasedRetryGas = (request.callbackGasLimit * 3n + 1n) / 2n;
@@ -138,7 +138,7 @@ export async function relayOnce({router, state, send, now, urls, consumer, relay
         log(`ALERT request ${id} paused: ${result.paused}`);
         continue;
       }
-      if (result.pending) { log(`ALERT request ${id}: transaction ${result.hash} pending reconciliation`); break; }
+      if (result.pending) { log(`ALERT request ${id}: transaction ${result.hash} pending reconciliation${result.reason ? ` (${result.reason})` : ''}`); break; }
       log(`Processed request ${id}: ${result.hash}, status ${result.status}`);
       if (result.status !== 1 && relayer) await state.releaseRequest?.(id, relayer);
       if ((await router.requests(id)).delivered) await state.delivered(id);

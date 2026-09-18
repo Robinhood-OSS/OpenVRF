@@ -196,6 +196,8 @@ export async function openRelayState(path, scope, limits, startBlock = 0n, coord
         (!data.pending || !/^0x[0-9a-f]{64}$/i.test(data.pending.hash) || !data.requests[data.pending.id] ||
         (data.pending.signedTransaction !== null && !/^0x[0-9a-f]+$/i.test(data.pending.signedTransaction)) ||
         (data.pending.nonce !== null && !decimal(data.pending.nonce)) ||
+        (data.pending.previousHashes !== undefined && (!Array.isArray(data.pending.previousHashes) ||
+          data.pending.previousHashes.some(hash => !/^0x[0-9a-f]{64}$/i.test(hash)))) ||
         !decimal(data.pending.reimbursementWei ?? '') ||
         !decimal(data.pending.submittedAt) || !decimal(data.pending.lastBroadcastAt) ||
         !Number.isSafeInteger(data.pending.rebroadcastCount) || data.pending.rebroadcastCount < 0 ||
@@ -356,6 +358,24 @@ export async function openRelayState(path, scope, limits, startBlock = 0n, coord
           nonce: String(pending.nonce), submittedAt: String(nowMs), lastBroadcastAt: '0',
           reimbursementWei: String(reimbursementWei), rebroadcastCount: 0,
           nextRebroadcastAt: '0', manualIntervention: false, manualReason: null};
+        await state.save();
+        return null;
+      },
+      async replacePending(hash, replacement, additionalCost) {
+        if (data.pending?.hash !== hash) throw new Error('Pending hash mismatch');
+        if (!/^0x[0-9a-f]{64}$/i.test(replacement.hash) ||
+            !/^0x[0-9a-f]+$/i.test(replacement.signedTransaction) || additionalCost <= 0n) {
+          throw new Error('Invalid replacement');
+        }
+        const entry = data.requests[data.pending.id];
+        if (BigInt(entry.authorizedWei) + additionalCost > limits.requestWei) return 'replacement request spending cap';
+        const projected = BigInt(data.authorizedWei) - BigInt(data.reimbursedWei) + additionalCost;
+        if (projected - BigInt(data.pending.reimbursementWei ?? '0') > limits.totalWei) return 'replacement total spending cap';
+        entry.authorizedWei = String(BigInt(entry.authorizedWei) + additionalCost);
+        data.authorizedWei = String(BigInt(data.authorizedWei) + additionalCost);
+        data.pending.previousHashes = [...(data.pending.previousHashes ?? []), hash];
+        data.pending.hash = replacement.hash;
+        data.pending.signedTransaction = replacement.signedTransaction;
         await state.save();
         return null;
       },

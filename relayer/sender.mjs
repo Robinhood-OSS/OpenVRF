@@ -1,9 +1,27 @@
-import {keccak256} from 'ethers';
+import {keccak256, Transaction} from 'ethers';
+
+export function rejectionReason(error) {
+  return String(error.info?.error?.message ?? error.error?.message ?? error.shortMessage ?? error.message ?? 'unknown RPC error')
+    .replace(/https?:\/\/\S+/gi, '[endpoint]')
+    .replace(/0x[0-9a-f]{64,}/gi, '[redacted]')
+    .replace(/[\r\n]/g, ' ').slice(0, 200);
+}
+
+async function gasQuote(provider) {
+  const [suggested, block] = await Promise.all([
+    provider.send('eth_gasPrice', []), provider.getBlock('latest'),
+  ]);
+  const price = BigInt(suggested);
+  if (price <= 0n || !block) throw new Error('Invalid gas quote');
+  const base = block.baseFeePerGas ?? 0n;
+  const required = price > base ? price : base;
+  return {required, buffered: required * 130n / 100n};
+}
 
 export function boundedSender({wallet, provider, state, maxGasPrice, receiptTimeoutMs = 60000,
   confirmations = 2}) {
   return async (id, transaction, gasFloor, reimbursementWei = 0n) => {
-    const gasPrice = BigInt(await provider.send('eth_gasPrice', []));
+    const gasPrice = (await gasQuote(provider)).buffered;
     if (gasPrice <= 0n || gasPrice > maxGasPrice) return {paused: 'gas price cap'};
     if (BigInt(transaction.value ?? 0) !== 0n) throw new Error('Unexpected transaction value');
     const estimate = await provider.estimateGas({...transaction, from: wallet.address});
@@ -20,8 +38,8 @@ export function boundedSender({wallet, provider, state, maxGasPrice, receiptTime
     try {
       await provider.broadcastTransaction(signed);
       await state.broadcasted(hash);
-    } catch {
-      return {hash, pending: true};
+    } catch (error) {
+      return {hash, pending: true, reason: rejectionReason(error)};
     }
     const receipt = await provider.waitForTransaction(hash, confirmations, receiptTimeoutMs).catch(() => null);
     if (!receipt) return {hash, pending: true};
@@ -40,25 +58,27 @@ export function boundedSender({wallet, provider, state, maxGasPrice, receiptTime
 // +-- Confirmed nonce > stored nonce
 // |   +-- Mark replaced, clear pending, retry request if needed
 // +-- Nonce still unused
-//     +-- Attempts remaining: identical rebroadcast plus backoff
+//     +-- Attempts remaining: capped fee replacement if underpriced, otherwise identical rebroadcast
 //     +-- Limit reached: manual_intervention, stop broadcasting
 //
-// Resolve one uncertain submission without ever creating a second transaction. If the transaction
-// vanished and its nonce is still unused, rebroadcasting identical signed bytes is idempotent.
+// Resolve one uncertain submission without creating a second nonce or changing its action.
+// Fee replacements retain earlier hashes for receipt discovery and preserve spending limits.
 export async function reconcilePending({wallet, provider, state, receiptTimeoutMs = 60000,
   confirmations = 2, allowBroadcast = true, isObsolete = async () => false,
-  maxRebroadcasts = 5, rebroadcastBackoffMs = 30000, now = BigInt(Date.now())}) {
+  maxRebroadcasts = 5, rebroadcastBackoffMs = 30000, maxGasPrice,
+  now = BigInt(Date.now())}) {
   const nowMs = typeof now === 'bigint' ? now : BigInt(now);
   const pending = state.data.pending;
   if (!pending) return {resolved: true};
-  const receipt = await provider.getTransactionReceipt(pending.hash);
-  if (receipt) {
+  for (const hash of [pending.hash, ...(pending.previousHashes ?? [])]) {
+    const receipt = await provider.getTransactionReceipt(hash);
+    if (!receipt) continue;
     const observed = (await provider.getBlockNumber()) - receipt.blockNumber + 1;
     if (observed >= confirmations) {
       await state.confirmed(pending.hash, receipt.status);
-      return {resolved: true, hash: pending.hash, status: receipt.status};
+      return {resolved: true, hash, status: receipt.status};
     }
-    return {resolved: false, hash: pending.hash, reason: 'confirming', confirmations: observed};
+    return {resolved: false, hash, reason: 'confirming', confirmations: observed};
   }
   // Sequencer RPCs may report a submitted transaction as pending even without exposing a
   // public peer-to-peer mempool. Retire it if another relayer already completed the request.
@@ -98,11 +118,32 @@ export async function reconcilePending({wallet, provider, state, receiptTimeoutM
     return {resolved: false, hash: pending.hash, reason: 'manual intervention: rebroadcast limit reached'};
   }
   const delay = BigInt(Math.min(3600000, rebroadcastBackoffMs * 2 ** pending.rebroadcastCount));
+  if (maxGasPrice !== undefined) {
+    const old = Transaction.from(pending.signedTransaction);
+    if (old.type !== 0 || old.from?.toLowerCase() !== wallet.address.toLowerCase() ||
+        BigInt(old.nonce) !== nonce || old.value !== 0n) {
+      return {resolved: false, hash: pending.hash, reason: 'unsupported fee replacement'};
+    }
+    const quote = await gasQuote(provider);
+    if (old.gasPrice < quote.required) {
+      const minimumBump = (old.gasPrice * 113n + 99n) / 100n;
+      const gasPrice = quote.buffered > minimumBump ? quote.buffered : minimumBump;
+      if (gasPrice > maxGasPrice) return {resolved: false, hash: pending.hash, reason: 'replacement gas price cap'};
+      // Only change the fee. Persist the replacement and additional reservation before broadcasting.
+      const signedTransaction = await wallet.signTransaction({type: 0, chainId: old.chainId,
+        nonce: old.nonce, to: old.to, data: old.data, value: old.value,
+        gasLimit: old.gasLimit, gasPrice});
+      const replacement = {hash: keccak256(signedTransaction), signedTransaction};
+      const paused = await state.replacePending(pending.hash, replacement,
+        old.gasLimit * (gasPrice - old.gasPrice));
+      if (paused) return {resolved: false, hash: pending.hash, reason: paused};
+    }
+  }
   await state.rebroadcasting(pending.hash, nowMs + delay, nowMs);
   try {
     await provider.broadcastTransaction(pending.signedTransaction);
-  } catch {
-    return {resolved: false, hash: pending.hash, reason: 'rebroadcast rejected'};
+  } catch (error) {
+    return {resolved: false, hash: pending.hash, reason: `rebroadcast rejected: ${rejectionReason(error)}`};
   }
   const result = await provider.waitForTransaction(pending.hash, confirmations, receiptTimeoutMs).catch(() => null);
   if (!result) return {resolved: false, hash: pending.hash, reason: 'receipt pending'};

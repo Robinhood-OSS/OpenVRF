@@ -4,7 +4,8 @@ import {mkdtemp, mkdir, readFile, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {openRelayState} from './state.mjs';
-import {boundedSender, reconcilePending} from './sender.mjs';
+import {Wallet, Transaction, keccak256} from 'ethers';
+import {boundedSender, reconcilePending, rejectionReason} from './sender.mjs';
 
 const hash = `0x${'ab'.repeat(32)}`;
 const pending = {hash, signedTransaction: '0x1234', nonce: 0n};
@@ -134,7 +135,7 @@ test('a file lock held by a live process is still refused', async t => {
 test('sender persists reservation before broadcast and retains uncertain submissions', async t => {
   const state = await openRelayState(await fixture(t), 'scope', {...limits, requestWei: 1000000n, totalWei: 1000000n});
   let broadcasts = 0;
-  const provider = {send: async () => '0x1', estimateGas: async () => 21000n,
+  const provider = {send: async () => '0x1', getBlock: async () => ({baseFeePerGas: 1n}), estimateGas: async () => 21000n,
     broadcastTransaction: async () => { broadcasts++; assert.ok(state.data.pending); throw new Error('Connection lost'); }};
   const wallet = {address: '0x1', populateTransaction: async tx => ({...tx, nonce: 0}), signTransaction: async () => '0x1234'};
   const send = boundedSender({wallet, provider, state, maxGasPrice: 2n});
@@ -146,7 +147,7 @@ test('sender persists reservation before broadcast and retains uncertain submiss
   await state.close();
 });
 test('high gas price pauses without signing or reserving', async () => {
-  const send = boundedSender({wallet: {}, state: {}, provider: {send: async () => '0x3'}, maxGasPrice: 2n});
+  const send = boundedSender({wallet: {}, state: {}, provider: {send: async () => '0x3', getBlock: async () => ({baseFeePerGas: 3n})}, maxGasPrice: 2n});
   assert.deepEqual(await send(1n, {}, 1n), {paused: 'gas price cap'});
 });
 
@@ -280,7 +281,7 @@ test('state methods reject unsafe numeric Unix timestamps', async t => {
 
 for (const status of [0, 1, null]) test(`receipt status ${status} preserves conservative spending`, async t => {
   const state = await openRelayState(await fixture(t), 'scope', {...limits, requestWei: 1000000n, totalWei: 1000000n});
-  const provider = {send: async () => '0x1', estimateGas: async () => 21000n,
+  const provider = {send: async () => '0x1', getBlock: async () => ({baseFeePerGas: 1n}), estimateGas: async () => 21000n,
     broadcastTransaction: async () => {}, waitForTransaction: async () => status === null ? null : {status}};
   const wallet = {address: '0x1', populateTransaction: async tx => ({...tx, nonce: 0}), signTransaction: async () => '0x1234'};
   const send = boundedSender({wallet, provider, state, maxGasPrice: 2n});
@@ -342,7 +343,7 @@ test('rebroadcast backoff and limit persist across restart', async t => {
     broadcastTransaction: async () => { broadcasts++; throw new Error('RPC rejected'); },
   };
   assert.equal((await reconcilePending({wallet: {address: '0x1'}, provider, state,
-    maxRebroadcasts: 1, rebroadcastBackoffMs: 30000, now: 2000})).reason, 'rebroadcast rejected');
+    maxRebroadcasts: 1, rebroadcastBackoffMs: 30000, now: 2000})).reason, 'rebroadcast rejected: RPC rejected');
   assert.equal(state.data.pending.rebroadcastCount, 1);
   assert.equal(state.data.pending.nextRebroadcastAt, '32000');
   await state.close();
@@ -474,4 +475,83 @@ test('superseded pending transaction is retired without rebroadcast', async t =>
   assert.equal(broadcasts, 0);
   assert.equal(state.data.pending, null);
   await state.close();
+});
+
+
+test('gas quote uses current base fee with headroom, even when RPC price lags', async () => {
+  let populated;
+  const send = boundedSender({provider: {send: async () => '0x64',
+    getBlock: async () => ({baseFeePerGas: 120n}), estimateGas: async () => 21000n,
+    broadcastTransaction: async () => { throw new Error('fee too low'); }},
+    wallet: {address: '0x1', populateTransaction: async tx => { populated = tx; return {...tx, nonce: 0}; },
+      signTransaction: async () => '0x1234'},
+    state: {reserve: async () => null}, maxGasPrice: 200n});
+  assert.equal((await send(1n, {}, 60000n)).reason, 'fee too low');
+  assert.equal(populated.gasPrice, 156n);
+});
+
+async function replacementFixture(t, requestWei = 10000000n, totalWei = 10000000n) {
+  const path = await fixture(t);
+  const wallet = Wallet.createRandom();
+  const signedTransaction = await wallet.signTransaction({type: 0, chainId: 4663,
+    nonce: 0, to: wallet.address, value: 0n, data: '0x1234', gasLimit: 21000n, gasPrice: 100n});
+  const original = {hash: keccak256(signedTransaction), signedTransaction, nonce: 0n};
+  const state = await openRelayState(path, 'scope', {...limits, requestWei, totalWei});
+  await state.reserve(1n, 2100000n, original, 1000);
+  return {path, wallet, state, original};
+}
+
+test('fee replacement persists before broadcast, preserves payload and accounts for the increase', async t => {
+  const {path, wallet, state, original} = await replacementFixture(t);
+  let replacement;
+  const provider = {getTransactionReceipt: async () => null, getTransaction: async () => null,
+    getBlockNumber: async () => 10, getTransactionCount: async () => 0,
+    send: async () => '0x64', getBlock: async () => ({baseFeePerGas: 120n}),
+    broadcastTransaction: async raw => {
+      replacement = Transaction.from(raw);
+      const saved = JSON.parse(await readFile(path, 'utf8'));
+      assert.equal(saved.pending.hash, replacement.hash);
+      assert.equal(saved.authorizedWei, '3276000');
+      throw new Error('connection lost');
+    }};
+  const result = await reconcilePending({wallet, provider, state, maxGasPrice: 200n, now: 2000});
+  assert.equal(result.reason, 'rebroadcast rejected: connection lost');
+  const old = Transaction.from(original.signedTransaction);
+  for (const field of ['nonce','to','from','data','value','gasLimit','chainId','type'])
+    assert.equal(replacement[field], old[field]);
+  assert.equal(replacement.gasPrice, 156n);
+  assert.equal(state.data.requests['1'].attempts, 1);
+  assert.deepEqual(state.data.pending.previousHashes, [original.hash]);
+  await state.close();
+  const reopened = await openRelayState(path, 'scope', {...limits, requestWei: 10000000n, totalWei: 10000000n});
+  const resolved = await reconcilePending({wallet, state: reopened, provider: {
+    getTransactionReceipt: async hash => hash === original.hash ? {status: 1, blockNumber: 8} : null,
+    getBlockNumber: async () => 10}});
+  assert.equal(resolved.hash, original.hash);
+  assert.equal(reopened.data.pending, null);
+  await reopened.close();
+});
+
+for (const [name, requestWei, totalWei, maxGasPrice, expected] of [
+  ['gas', 10000000n, 10000000n, 150n, 'replacement gas price cap'],
+  ['request', 2200000n, 10000000n, 200n, 'replacement request spending cap'],
+  ['total', 10000000n, 2200000n, 200n, 'replacement total spending cap'],
+]) test(`fee replacement respects ${name} cap without changing the reservation`, async t => {
+  const {wallet, state, original} = await replacementFixture(t, requestWei, totalWei);
+  const provider = {getTransactionReceipt: async () => null, getTransaction: async () => null,
+    getBlockNumber: async () => 10, getTransactionCount: async () => 0,
+    send: async () => '0x64', getBlock: async () => ({baseFeePerGas: 120n}),
+    broadcastTransaction: assert.fail};
+  assert.equal((await reconcilePending({wallet, state, provider, maxGasPrice, now: 2000})).reason, expected);
+  assert.equal(state.data.pending.hash, original.hash);
+  assert.equal(state.data.authorizedWei, '2100000');
+  await state.close();
+});
+
+test('broadcast rejection logs redact endpoint credentials and signed bytes', () => {
+  const secret = '0x' + 'ab'.repeat(100);
+  const reason = rejectionReason({info: {error: {message: `fee too low ${secret} https://rpc.example/secret-key`}}});
+  assert.match(reason, /fee too low/);
+  assert.ok(!reason.includes(secret));
+  assert.ok(!reason.includes('secret-key'));
 });

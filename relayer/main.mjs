@@ -185,7 +185,7 @@ try {
         }
         const result = await reconcilePending({
             wallet, provider, state, receiptTimeoutMs, confirmations, allowBroadcast: ownsLease,
-            maxRebroadcasts, rebroadcastBackoffMs,
+            maxRebroadcasts, rebroadcastBackoffMs, maxGasPrice,
             isObsolete: async (pending) => {
                 if (!pending.signedTransaction) return false;
                 let method;
@@ -223,6 +223,7 @@ try {
         .map((url) => url.trim());
     const latestBlock = await provider.getBlock('latest');
     let latestBlockNumber = latestBlock.number;
+    let lastWebsocketBlockAt = Date.now();
     await syncRequests({
         router,
         state,
@@ -286,6 +287,7 @@ try {
     wakeRelayer = notify;
     if (wsProvider && wsRouter) {
         wsProvider.on('block', (blockNumber) => {
+            lastWebsocketBlockAt = Date.now();
             latestBlockNumber = blockNumber;
             blockAdvanced = true;
             notify();
@@ -312,11 +314,14 @@ try {
             }
             if (Date.now() - lastReconcile >= reconcileMs) {
                 if (state.data.pending && await reconcileTransaction()) blockAdvanced = true;
-                const head = await reconciliationHead(provider, latestBlockNumber);
+                const websocketHead = latestBlockNumber;
+                const head = await reconciliationHead(provider, websocketHead);
                 if (head.changed) {
-                    if (wsProvider && head.websocketBehind) {
+                    if (wsProvider && head.websocketBehind &&
+                        Date.now() - lastWebsocketBlockAt >= reconcileMs &&
+                        head.httpHead - websocketHead > Number(headLag)) {
                         console.error(
-                            `ALERT WebSocket head ${latestBlockNumber} behind HTTP head ${head.httpHead}; reconciling missed blocks`,
+                            `ALERT WebSocket head ${websocketHead} behind HTTP head ${head.httpHead}; reconciling missed blocks`,
                         );
                     }
                     latestBlockNumber = head.httpHead;

@@ -121,7 +121,9 @@ The relayer validates at startup that `CONSUMER_ADDRESS` is an authorized consum
 signing wallet is either the router owner or an authorized relayer. It exits instead of spending
 gas when either check fails.
 
-Fund this signer sparingly and monitor its `ALERT` logs. Defaults are three paid attempts per
+The signer uses the greater of the RPC gas quote and current base fee, with 30% gas-price
+headroom subject to `MAX_GAS_PRICE_GWEI`. Broadcast rejection logs redact endpoint URLs and
+long hexadecimal payloads. Fund this signer sparingly and monitor its `ALERT` logs. Defaults are three paid attempts per
 request (initial submission plus at most two retries), 30-second exponential backoff capped at
 one hour, 0.001 ETH maximum authorized gas cost per request, a 0.01 ETH renewable operating cap,
 and a 2 gwei gas-price ceiling. Startup recovery reads up to 100,000 blocks per RPC query. Regular
@@ -168,8 +170,12 @@ policies for the same version, and a newer active version makes old processes ex
 changes, stop every instance, increment the version, update the list, and restart them together.
 On startup and every reconciliation, a pending transaction with a mined
 receipt is finalized in the ledger. If it remains in the mempool, the relayer waits. If it is absent
-and the stored nonce is still unused, the relayer rebroadcasts the exact signed bytes, producing the
-same hash. `MAX_REBROADCASTS` bounds those submissions and `REBROADCAST_BACKOFF_SECONDS` controls
+and the stored nonce is still unused, the relayer rebroadcasts the signed bytes. If its fixed gas price is below the current RPC/base-fee
+requirement and the transaction is not visible in the mempool, it may replace only its gas price
+at the same nonce. The destination, calldata, value and gas limit stay fixed. Earlier hashes
+remain tracked in PostgreSQL so an earlier version being mined still resolves the reservation.
+The additional maximum cost is reserved before broadcasting and must fit both spending caps
+and `MAX_GAS_PRICE_GWEI`. Replacement uses the existing rebroadcast limit and backoff. `MAX_REBROADCASTS` bounds those submissions and `REBROADCAST_BACKOFF_SECONDS` controls
 their persisted exponential backoff. If a confirmation-safe chain nonce has already consumed the
 stored nonce, the impossible old transaction is marked replaced and the request can retry. A nonce
 gap, legacy ledger without signed bytes, or exhausted rebroadcast limit enters persistent manual
