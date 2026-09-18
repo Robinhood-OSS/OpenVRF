@@ -32,7 +32,10 @@ and exercised on Robinhood Chain testnet with genuine drand fulfillment, callbac
 nonzero request fee paid directly to the fulfilling relayer on 2026-09-13. A separate historical
 revision exercised restart recovery on testnet, while the continuous relayer's restart,
 multi-wallet, failover, and burst behavior is covered by the local Docker integration suite.
-No production deployment is recorded in this repository. Deployment accepts
+A bounded mainnet smoke test on 2026-09-18 recorded two zero-fee requests and successful callbacks
+on the prior second-future-round runtime; see the [mainnet evidence](../README.md#robinhood-mainnet-smoke-test--2026-09-18).
+It does not establish mainnet behavior or timing safety for the current first-future-round source.
+Deployment accepts
 Robinhood Chain's sequencer ordering and block timestamp
 as the commitment clock. This is the same fundamental trust placed in the chain for contract state;
 it is an explicit fast-mode trust assumption rather than an unresolved router mechanism.
