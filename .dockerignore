@@ -2,4 +2,8 @@
 !package.json
 !package-lock.json
 !relayer/
-!relayer/**
+relayer/**
+!relayer/main.mjs
+!relayer/relay.mjs
+!relayer/sender.mjs
+!relayer/state.mjs
