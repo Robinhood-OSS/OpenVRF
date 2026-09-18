@@ -178,6 +178,8 @@ remain tracked in PostgreSQL so an earlier version being mined still resolves th
 RPC visibility does not establish sequencer inclusion. On Robinhood, the fee increase addresses
 gas-price eligibility, not ordering priority; replacement acceptance still depends on the provider
 and sequencer. This recovery does not automatically cancel transactions or repair nonce gaps.
+The [replacement review](reviews/relayer-underpriced-replacement.md) records the Kimi
+review, test coverage, Robinhood research and why automatic cancellation is omitted.
 The additional maximum cost is reserved before broadcasting and must fit both spending caps
 and `MAX_GAS_PRICE_GWEI`. Replacement uses the existing rebroadcast limit and backoff. `MAX_REBROADCASTS` bounds those submissions and `REBROADCAST_BACKOFF_SECONDS` controls
 their persisted exponential backoff. If a confirmation-safe chain nonce has already consumed the
