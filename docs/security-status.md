@@ -9,10 +9,10 @@ specialist cryptographic audit.
 | Area | Evidence in this repository | Still required |
 |---|---|---|
 | Callback | Two-wallet ten-request Docker burst, stopped-primary failover, plus historical Robinhood testnet delivery; sequential consumer/router results agree | Application-specific callback and settlement review |
-| Router correctness | 31 Solidity tests, including access control, direct proof-relayer payment, stored fees/emergency recovery, 256 timing-fuzz cases and first-future-round boundaries | More complete state-machine and edge-condition coverage |
+| Router correctness | 31 Solidity tests, including access control, direct proof-relayer payment, stored fees/emergency recovery, 256 timing-fuzz cases and minimum-lead round boundaries | More complete state-machine and edge-condition coverage |
 | Verifier interoperability | Genuine public evmnet signature fixtures verified offline | Broad independent reference/differential vectors and specialist review |
 | Relayer | Node tests cover deterministic assignment/failover, renewable accounting, stale-WebSocket recovery, event cursor/queue, state migration, caps/backoff, validated fallback and durable transaction reconciliation | Operational monitoring, request admission control and multi-wallet soak testing |
-| Timing | First-future-round arithmetic tests; prior second-future-round Robinhood Chain testnet delivery | Operate under the documented sequencer ordering/timestamp trust model; monitor timestamp freshness |
+| Timing | Inclusive minimum-lead arithmetic tests; prior second-future-round Robinhood Chain testnet delivery | Operate under the documented sequencer ordering/timestamp trust model; monitor timestamp freshness |
 
 Run `forge test`, `npm test`, and the Docker end-to-end workflow in the [runbook](runbook.md).
 The [fairness checker](fairness.md) adds three offline Node tests for independent JavaScript
@@ -24,8 +24,8 @@ No operator-specific addresses, funding-wallet records, or receipts are distribu
 
 ## Timing trust model
 
-The current source selects the first future beacon round after `block.timestamp`, scheduled
-1–3 seconds later. This narrower margin requires the request to be committed before the
+The current source selects the future beacon round after `block.timestamp`, scheduled
+2–4 seconds later. This narrower margin requires the request to be committed before the
 selected beacon becomes public; it is not a finality guarantee. The prior second-future-round
 direct-payment runtime (4–6 seconds of scheduled lead time) was deployed
 and exercised on Robinhood Chain testnet with genuine drand fulfillment, callback delivery, and a
@@ -34,7 +34,7 @@ revision exercised restart recovery on testnet, while the continuous relayer's r
 multi-wallet, failover, and burst behavior is covered by the local Docker integration suite.
 A bounded mainnet smoke test on 2026-09-18 recorded two zero-fee requests and successful callbacks
 on the prior second-future-round runtime; see the [mainnet evidence](../README.md#robinhood-mainnet-smoke-test--2026-09-18).
-It does not establish mainnet behavior or timing safety for the current first-future-round source.
+It does not establish mainnet behavior or timing safety for the current two-second-minimum-lead source.
 Deployment accepts
 Robinhood Chain's sequencer ordering and block timestamp
 as the commitment clock. This is the same fundamental trust placed in the chain for contract state;

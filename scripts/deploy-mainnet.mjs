@@ -69,7 +69,7 @@ try {
     ], provider);
     const checks = await Promise.all([router.owner(), router.MIN_DELAY(), router.requestFee(),
       consumerAddress === ZeroAddress ? true : router.authorizedConsumers(consumerAddress), router.authorizedRelayers(relayer)]);
-    if (getAddress(checks[0]) !== owner || checks[1] !== 0n || checks[2] !== fee ||
+    if (getAddress(checks[0]) !== owner || checks[1] !== 2n || checks[2] !== fee ||
         !checks[3] || !checks[4]) {
       throw new Error(`Post-deployment verification failed. Addresses saved in ${manifestPath}; do not deploy again blindly.`);
     }
@@ -83,7 +83,7 @@ try {
     writeFileSync(temporary, lines.join('\n').trimEnd() + '\n' + Object.entries(updates).map(([key, value]) => `${key}=${value}`).join('\n') + '\n', {mode: 0o600});
     chmodSync(temporary, 0o600);
     renameSync(temporary, '.env');
-    console.log('Verified owner, first-future-round timing, fee and configured authorizations. Updated local .env.');
+    console.log('Verified owner, 2–4-second beacon timing, fee and configured authorizations. Updated local .env.');
     console.log('Update ROUTER_ADDRESS and START_BLOCK on your server, then recreate its relayer container.');
   }
 } finally {

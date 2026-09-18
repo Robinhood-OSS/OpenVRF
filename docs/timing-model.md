@@ -3,7 +3,7 @@
 Think of a raffle: ticket sales must be firmly closed before the winning number becomes public.
 Drand runs the draw on its own public schedule. It does not wait for our chain or relayer.
 
-Our router chooses the first future draw, scheduled 1–3 seconds after the request block's timestamp.
+Our router chooses the future draw, scheduled 2–4 seconds after the request block's timestamp.
 This policy was selected for lower latency. It leaves less margin for timestamp staleness and
 sequencer delay than the previous second-future-round policy (4–6 seconds). It does not
 independently establish that the beacon was unknown when participation was committed.
@@ -11,9 +11,9 @@ The fast mode treats Robinhood Chain's sequencer ordering and timestamp as autho
 request executes. This is the selected deployment trust model. A dishonest or abnormally stale
 chain clock is outside that model, just as dishonest ordering would be for other contract actions.
 
-For example, a block timestamp of 12:00:00 could select a draw between 12:00:04 and 12:00:06. We
+For example, a block timestamp of 12:00:00 could select a draw between 12:00:02 and 12:00:04. We
 need tickets locked before that draw, not merely a callback delivered afterwards. Waiting until
-12:05 to deliver the result cannot undo its publication around 12:00:04–12:00:06.
+12:05 to deliver the result cannot undo its publication around 12:00:02–12:00:04.
 
 [Robinhood documents](https://docs.robinhood.com/chain/) first-come-first-served sequencing and an
 Arbitrum-based L2. Next-round selection deliberately uses that fast sequencer-confirmed view; it
@@ -70,6 +70,6 @@ behavior, so the stated chain-timestamp trust assumption remains.
   [Official design](https://docs.gelato.cloud/vrf/introduction/how-gelato-vrf-works).
 
 We selected the fast mode in source: trust Robinhood Chain's sequencing and timestamp, then use the
-first future drand round. The router permanently binds that round and preserves the same result on retries.
+drand round at least two seconds ahead. The router permanently binds that round and preserves the same result on retries.
 Stronger Ethereum anchoring would be a different latency/security mode. How a consumer uses the
 verified word is outside the oracle's control and must be reviewed by that application.

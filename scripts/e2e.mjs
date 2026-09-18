@@ -150,7 +150,7 @@ try {
   const activeVersion = execFileSync('docker', ['exec', postgresName, 'psql', '-U', 'openvrf',
     '-d', 'openvrf', '-tAc', 'SELECT version FROM openvrf_relayer_assignment'], {encoding: 'utf8'}).trim();
   if (activeVersion !== '1') throw new Error('Failed startup incorrectly activated a newer relayer set');
-  await provider.send('evm_setNextBlockTimestamp', [roundTime - 1]);
+  await provider.send('evm_setNextBlockTimestamp', [roundTime - 2]);
   await provider.send('evm_setAutomine', [false]);
   const firstNonce = await provider.getTransactionCount(requester.address);
   const requestTransaction = await consumer.connect(requester).request.populateTransaction({value: requestFee});

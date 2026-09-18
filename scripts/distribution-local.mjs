@@ -52,7 +52,7 @@ try {
   }
   const samples = [];
   for (let i = 0; i < count; i++) {
-    await p.send('evm_setNextBlockTimestamp', [roundTime - 1]);
+    await p.send('evm_setNextBlockTimestamp', [roundTime - 2]);
     const tx = await consumers[i % 2].request();
     const receipt = await mined(tx);
     const event = receipt.logs.map(l => {try {return router.interface.parseLog(l);} catch {return null;}})

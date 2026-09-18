@@ -1,7 +1,7 @@
 # Robinhood Chain testnet evidence
 
-These dated records describe earlier deployments. The current source selects the first future
-round (1–3 seconds); the September 13 deployment below selected the second future round (4–6 seconds).
+These dated records describe earlier deployments. The current source selects a future
+round with 2–4 seconds of scheduled lead time; the September 13 deployment below selected the second future round (4–6 seconds).
 
 ## Previous second-future-round direct-payment revision — 2026-09-13
 

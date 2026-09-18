@@ -165,7 +165,7 @@ flowchart LR
     R -->|Authenticated callback| C
 ```
 
-1. **Commit.** Store the caller, callback gas, request ID, and first future drand round after the request
+1. **Commit.** Store the caller, callback gas, request ID, and drand round scheduled 2–4 seconds after the request
    block timestamp.
 2. **Observe.** Find pending requests and wait for their public beacon rounds.
 3. **Validate.** Check endpoint responses before authorizing gas; invalid responses fall through to
@@ -242,7 +242,7 @@ flowchart TD
 
 The router controls the solid path: it permanently binds a request to one round and one consumer,
 accepts only the valid proof, derives one reproducible word, and never redraws it. Its remaining
-timing assumption is that the chain timestamp is fresh enough that the selected first future round is still
+timing assumption is that the chain timestamp is fresh enough that the selected future round is still
 unpublished when the request executes. What a consumer does with the word—including eligibility,
 odds, cancellation, and payouts—is outside this oracle's control and must be assessed separately.
 RPC records also depend on the selected chain view and verified deployed bytecode.
@@ -397,7 +397,7 @@ test. It also preserves a clearly separated historical first-future-round run.
 
 What this evidence does **not** establish:
 
-- Each request permanently selects the first future drand round, 1–3 seconds after the request
+- Each request permanently selects a future drand round, 2–4 seconds after the request
   block timestamp. This is not a callback deadline. Unpredictability assumes the chain timestamp is
   sufficiently fresh that the round is not already public.
 - The previous second-future-round paid test took approximately 10–11 seconds from request receipt to fulfillment receipt.

@@ -107,7 +107,7 @@ contract OpenVRFTest {
     receive() external payable {}
 
     function setUp() public {
-        vm.warp(ROUND_TIME - 1);
+        vm.warp(ROUND_TIME - 2);
         router = new OpenVRF(address(this), address(0x1234), 0);
         consumer = new TestConsumer(router);
         router.setConsumerAuthorization(address(consumer), true);
@@ -464,18 +464,19 @@ contract OpenVRFTest {
         uint256 id = consumer.request(100_000);
         (, uint64 round,,,,,) = router.requests(id);
         uint256 availableAt = router.GENESIS() + (uint256(round) - 1) * 3;
-        require(availableAt > timestamp && availableAt <= timestamp + 3, "Bad round boundary");
+        require(availableAt >= timestamp + 2 && availableAt <= timestamp + 4, "Bad round boundary");
+        require(availableAt - router.PERIOD() < timestamp + 2, "Must select earliest eligible round");
     }
 
-    function testFirstFutureRoundAtEveryPeriodBoundary() public {
+    function testMinimumDelayAtEveryPeriodBoundary() public {
         for (uint256 offset = 0; offset < 3; offset++) {
             uint256 timestamp = router.GENESIS() + 300 + offset;
             vm.warp(timestamp);
             uint256 id = consumer.request(100_000);
             (, uint64 round,,,,,) = router.requests(id);
-            require(round == 102, "Must select first future round");
+            require(round == (offset < 2 ? 102 : 103), "Incorrect selected round");
             uint256 availableAt = router.GENESIS() + (uint256(round) - 1) * 3;
-            require(availableAt - timestamp == 3 - offset, "Incorrect lead time");
+            require(availableAt - timestamp == (offset < 2 ? 3 - offset : 6 - offset), "Incorrect lead time");
         }
     }
 
@@ -501,7 +502,7 @@ contract OpenVRFTest {
         ];
         for (uint256 i; i < rounds.length; i++) {
             uint256 target = router.GENESIS() + (uint256(rounds[i]) - 1) * router.PERIOD();
-            vm.warp(target - 1);
+            vm.warp(target - 2);
             uint256 id = consumer.request(100_000);
             (, uint64 selected,,,,,) = router.requests(id);
             require(selected == rounds[i], "Fixture round mismatch");

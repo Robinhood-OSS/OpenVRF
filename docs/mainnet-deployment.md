@@ -1,10 +1,10 @@
 # Robinhood mainnet deployment and router migration
 
-This guide deploys the first-future-round OpenVRF router and a demonstration consumer,
+This guide deploys the OpenVRF router with a two-second minimum beacon lead and a demonstration consumer,
 then switches an existing Docker Compose relayer to the new router. It reuses the
 existing deployer keystore, relayer wallet, GHCR image and PostgreSQL container.
 
-The router selects a drand round scheduled **1–3 seconds after the request block
+The router selects a drand round scheduled **2–4 seconds after the request block
 timestamp**. This is the beacon lead time, not a callback deadline. The shorter
 margin still requires commitment before the selected beacon becomes public.
 Functional tests do not establish production security; see [security status](security-status.md).
@@ -83,7 +83,7 @@ rg 'MIN_DELAY =' src/OpenVRF.sol
 Expected source setting:
 
 ```solidity
-uint256 public constant MIN_DELAY = 0;
+uint256 public constant MIN_DELAY = 2;
 ```
 
 If dependencies are not installed yet:
@@ -286,7 +286,7 @@ cast call "$ROUTER_ADDRESS" \
 cast call "$ROUTER_ADDRESS" "requestFee()(uint256)" --rpc-url "$RPC_URL"
 ```
 
-Expect a successful receipt, `MIN_DELAY = 0`, your initial owner, relayer
+Expect a successful receipt, `MIN_DELAY = 2`, your initial owner, relayer
 authorization `true`, and your configured request fee.
 
 ## 6. Verify the router source
