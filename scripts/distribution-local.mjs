@@ -18,7 +18,7 @@ const port = await new Promise(resolve => {
 });
 const roundTime = 1727521075 + (fixture.round - 1) * 3;
 const anvil = spawn('anvil', ['--host', '127.0.0.1', '--port', String(port), '--timestamp',
-  String(roundTime - 4), '--silent'], {stdio: 'ignore'});
+  String(roundTime - 100), '--silent'], {stdio: 'ignore'});
 const p = new JsonRpcProvider(`http://127.0.0.1:${port}`, 31337, {staticNetwork: true, cacheTimeout: -1, batchStallTime: 0});
 // Poll receipts directly with a deadline; event-based tx.wait() stalled during
 // the first 10k request-only run despite the receipt already being mined.
@@ -52,7 +52,7 @@ try {
   }
   const samples = [];
   for (let i = 0; i < count; i++) {
-    await p.send('evm_setNextBlockTimestamp', [roundTime - 4]);
+    await p.send('evm_setNextBlockTimestamp', [roundTime - 1]);
     const tx = await consumers[i % 2].request();
     const receipt = await mined(tx);
     const event = receipt.logs.map(l => {try {return router.interface.parseLog(l);} catch {return null;}})

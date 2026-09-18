@@ -73,7 +73,7 @@ not make an already public beacon secret again.
 | Requirement | What supports it | Remaining boundary |
 |---|---|---|
 | Authentic beacon | Independent BLS verification against pinned evmnet key | Threshold and cryptographic assumptions; verifier correctness |
-| Unknown when requested | Router permanently selects the second future round according to block time | Requires a sufficiently fresh chain timestamp so that round is not already public |
+| Unknown when requested | Router permanently selects the first future round according to block time | Requires a sufficiently fresh chain timestamp so that round is not already public |
 | No selective redraw | Router stores one result; callback retries reuse it | A consumer can ignore the result, but cannot make the router produce another for that request |
 | Eventual delivery | Authorized relayers plus same-result retry | Relayer availability, chain, gas funding and consumer availability; no delivery deadline |
 

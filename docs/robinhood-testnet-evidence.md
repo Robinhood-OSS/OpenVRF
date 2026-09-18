@@ -1,8 +1,11 @@
 # Robinhood Chain testnet evidence
 
-## Current direct-payment revision — 2026-09-13
+These dated records describe earlier deployments. The current source selects the first future
+round (1–3 seconds); the September 13 deployment below selected the second future round (4–6 seconds).
 
-The exact current router runtime was deployed with a zero initial fee, then exercised with a
+## Previous second-future-round direct-payment revision — 2026-09-13
+
+The second-future-round router runtime was deployed with a zero initial fee, then exercised with a
 zero-fee calibration request. The calibration's live `eth_estimateGas` result was multiplied by the
 observed gas price and by three to set the paid request fee:
 
@@ -22,12 +25,12 @@ consumer callback. Both selected beacon rounds were 4–6 seconds after their re
 
 | Component | Address |
 |---|---|
-| Current router | [`0x29FF07D37ad8920f52f09A91A19979fBb841f6eb`](https://explorer.testnet.chain.robinhood.com/address/0x29FF07D37ad8920f52f09A91A19979fBb841f6eb) |
+| Recorded router | [`0x29FF07D37ad8920f52f09A91A19979fBb841f6eb`](https://explorer.testnet.chain.robinhood.com/address/0x29FF07D37ad8920f52f09A91A19979fBb841f6eb) |
 | Example consumer | [`0xedDb97471443279aaB5E7D2a7468F2274D3f57cf`](https://explorer.testnet.chain.robinhood.com/address/0xedDb97471443279aaB5E7D2a7468F2274D3f57cf) |
 
 | Step | Block | Gas used | Transaction |
 |---|---:|---:|---|
-| Deploy current router | 118,774,144 | 3,004,013 | [`0x35f22a…6c0f3`](https://explorer.testnet.chain.robinhood.com/tx/0x35f22acdbfb629fbc13482d20ef5ef77ec27b94eef42c1f8aad57facf936c0f3) |
+| Deploy recorded router | 118,774,144 | 3,004,013 | [`0x35f22a…6c0f3`](https://explorer.testnet.chain.robinhood.com/tx/0x35f22acdbfb629fbc13482d20ef5ef77ec27b94eef42c1f8aad57facf936c0f3) |
 | Deploy example consumer | 118,774,211 | 246,509 | [`0x8330a4…05e25`](https://explorer.testnet.chain.robinhood.com/tx/0x8330a485d88e4db3540c8a94e823fea67d9fb2590d36620d7e4091ffae805e25) |
 | Authorize consumer | 118,774,280 | 52,910 | [`0x9afec0…6c5a`](https://explorer.testnet.chain.robinhood.com/tx/0x9afec0db117ed5e188fedc8b4784abb08b54f7647885926ba846aae85e5f6c5a) |
 | Zero-fee calibration request | 118,774,333 | 68,766 | [`0x7ce336…4443`](https://explorer.testnet.chain.robinhood.com/tx/0x7ce33670b18f063e89eb7a495b0a439232751cf7273caf028217b791a95e4443) |

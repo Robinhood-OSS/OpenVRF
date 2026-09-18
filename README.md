@@ -26,7 +26,7 @@ their timestamp model, BN254 precompile behavior, Multicall3 availability, and R
 ![Drand beacon randomness flowing through on-chain proof verification to authenticated EVM callbacks](assets/openvrf-banner.png)
 
 > [!NOTE]
-> The current direct-payment revision has been tested on Robinhood Chain testnet with genuine drand
+> The previous second-future-round direct-payment revision was tested on Robinhood Chain testnet with genuine drand
 > proofs, authenticated callbacks, and an exact request fee paid directly to the fulfilling wallet.
 > That bounded manual smoke test used a fee equal to three times one live gas estimate; it demonstrates
 > payment behavior, not a recommended production price. The continuous PostgreSQL relayer's restart,
@@ -165,7 +165,7 @@ flowchart LR
     R -->|Authenticated callback| C
 ```
 
-1. **Commit.** Store the caller, callback gas, request ID, and second future drand round after the request
+1. **Commit.** Store the caller, callback gas, request ID, and first future drand round after the request
    block timestamp.
 2. **Observe.** Find pending requests and wait for their public beacon rounds.
 3. **Validate.** Check endpoint responses before authorizing gas; invalid responses fall through to
@@ -242,7 +242,7 @@ flowchart TD
 
 The router controls the solid path: it permanently binds a request to one round and one consumer,
 accepts only the valid proof, derives one reproducible word, and never redraws it. Its remaining
-timing assumption is that the chain timestamp is fresh enough that the selected second future round is still
+timing assumption is that the chain timestamp is fresh enough that the selected first future round is still
 unpublished when the request executes. What a consumer does with the word—including eligibility,
 odds, cancellation, and payouts—is outside this oracle's control and must be assessed separately.
 RPC records also depend on the selected chain view and verified deployed bytecode.
@@ -319,13 +319,16 @@ rather than racing a possibly broadcast transaction.
 | Gas-price ceiling | 2 gwei |
 | Receipt wait | 60 seconds, configurable; timeout enters pending reconciliation |
 | Receipt confirmations | 2 |
-| Automatic identical rebroadcasts | 5, with exponential backoff from 30 seconds |
+| Automatic rebroadcasts / fee replacements | 5, with exponential backoff from 30 seconds |
 | Cross-wallet request lease | 120 seconds |
 
 Reservations count maximum authorized gas, not actual receipt fees, and unused gas is not returned
 to the ledger budget. An uncertain transaction blocks new spending but does not stop the service:
-reconciliation checks its receipt and mempool presence, then rebroadcasts identical signed bytes
-only while its nonce remains unused. A confirmation-safe consumed nonce retires the impossible old
+reconciliation checks receipts (including earlier replacement hashes) and mempool presence, then
+rebroadcasts while its nonce remains unused. An underpriced transaction absent from the mempool
+may receive a same-nonce fee replacement within the gas-price and spending caps; its action stays
+fixed and additional gas cost is reserved durably before broadcast. New submissions use the
+greater of the RPC quote and base fee with 30% gas-price headroom. A confirmation-safe consumed nonce retires the impossible old
 transaction so the request can retry. Reaching the rebroadcast limit enters persistent
 `manual_intervention` without erasing recovery data or continuing to broadcast. Run one relayer
 process per signing wallet. Alerts are logs only. See the
@@ -373,7 +376,7 @@ repository provides no shared funded relayer or hosted endpoint.
 | Relayer | Node tests: deterministic round-robin/failover assignment, renewable and lifetime accounting, stale-WebSocket recovery, event backfill/cursor recovery, optional Multicall3 startup pruning, listener head separation, state migration, high request IDs, endpoint fallback, persistence, retry/backoff, spending limits, and ambiguous receipts |
 | Independent verifier | 3 Node tests: real signature, altered proofs, wrong rounds, and request-input tampering |
 | Local integration | Two-wallet ten-request same-block split, distinct callbacks, direct fee payment, signer locking without premature version activation, stopped-primary takeover, active-version retirement, and PostgreSQL restart on disposable Anvil |
-| Robinhood testnet | Exact current router runtime, genuine live drand proofs, second-future-round selection, zero-fee and paid requests, direct relayer payment, and authenticated callbacks through a bounded manual smoke runner |
+| Robinhood testnet | Previous second-future-round router runtime, genuine live drand proofs, zero-fee and paid requests, direct relayer payment, and authenticated callbacks through a bounded manual smoke runner |
 
 ### Output distribution check
 
@@ -389,16 +392,16 @@ does not certify cryptographic security. Full samples, methodology, and holdout 
 [distribution diagnostics](docs/distribution-check.md).
 
 The [Robinhood Chain testnet evidence](docs/robinhood-testnet-evidence.md) links the deployment,
-request, fulfillment, fee-setting, payment, and callback transactions for the current paid smoke
+request, fulfillment, fee-setting, payment, and callback transactions for the previous second-future-round paid smoke
 test. It also preserves a clearly separated historical first-future-round run.
 
 What this evidence does **not** establish:
 
-- Each request permanently selects the second future drand round, 4–6 seconds after the request
+- Each request permanently selects the first future drand round, 1–3 seconds after the request
   block timestamp. This is not a callback deadline. Unpredictability assumes the chain timestamp is
   sufficiently fresh that the round is not already public.
-- The latest paid test took approximately 10–11 seconds from request receipt to fulfillment receipt.
-  This is one observation, not a latency guarantee. The selected beacon being 4–6 seconds ahead is
+- The previous second-future-round paid test took approximately 10–11 seconds from request receipt to fulfillment receipt.
+  This is one observation, not a latency guarantee. The selected beacon lead time is
   not the callback duration; drand publication, RPC availability, relayer processing, gas limits,
   and transaction inclusion add delay.
 - The router and Solidity BLS verifier have extensive automated tests but no independent production
@@ -442,6 +445,7 @@ and [pinned verifier source](https://github.com/randa-mu/bls-solidity/tree/11af1
 - [Fairness and independent verification](docs/fairness.md) — what the checker proves and does not prove
 - [Architecture](docs/architecture.md) — components, trust boundaries, sequence, and state diagrams
 - [Operator runbook](docs/runbook.md) — deployment, signer setup, limits, and recovery
+- [Robinhood mainnet deployment](docs/mainnet-deployment.md) — copy-and-paste router redeployment, consumer setup, and Docker relayer migration
 - [Security status](docs/security-status.md) — completed checks and remaining assurance gaps
 - [Distribution diagnostics](docs/distribution-check.md) — reproducible uniformity checks over local and historical samples
 - [Timing model](docs/timing-model.md) — commitment timing and provider-design comparisons

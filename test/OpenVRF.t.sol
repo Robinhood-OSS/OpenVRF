@@ -107,7 +107,7 @@ contract OpenVRFTest {
     receive() external payable {}
 
     function setUp() public {
-        vm.warp(ROUND_TIME - 4);
+        vm.warp(ROUND_TIME - 1);
         router = new OpenVRF(address(this), address(0x1234), 0);
         consumer = new TestConsumer(router);
         router.setConsumerAuthorization(address(consumer), true);
@@ -464,18 +464,18 @@ contract OpenVRFTest {
         uint256 id = consumer.request(100_000);
         (, uint64 round,,,,,) = router.requests(id);
         uint256 availableAt = router.GENESIS() + (uint256(round) - 1) * 3;
-        require(availableAt > timestamp + 3 && availableAt <= timestamp + 6, "Bad round boundary");
+        require(availableAt > timestamp && availableAt <= timestamp + 3, "Bad round boundary");
     }
 
-    function testSecondFutureRoundAtEveryPeriodBoundary() public {
+    function testFirstFutureRoundAtEveryPeriodBoundary() public {
         for (uint256 offset = 0; offset < 3; offset++) {
             uint256 timestamp = router.GENESIS() + 300 + offset;
             vm.warp(timestamp);
             uint256 id = consumer.request(100_000);
             (, uint64 round,,,,,) = router.requests(id);
-            require(round == 103, "Must select second future round");
+            require(round == 102, "Must select first future round");
             uint256 availableAt = router.GENESIS() + (uint256(round) - 1) * 3;
-            require(availableAt - timestamp == 6 - offset, "Incorrect lead time");
+            require(availableAt - timestamp == 3 - offset, "Incorrect lead time");
         }
     }
 
@@ -501,7 +501,7 @@ contract OpenVRFTest {
         ];
         for (uint256 i; i < rounds.length; i++) {
             uint256 target = router.GENESIS() + (uint256(rounds[i]) - 1) * router.PERIOD();
-            vm.warp(target - 4);
+            vm.warp(target - 1);
             uint256 id = consumer.request(100_000);
             (, uint64 selected,,,,,) = router.requests(id);
             require(selected == rounds[i], "Fixture round mismatch");

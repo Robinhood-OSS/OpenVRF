@@ -35,7 +35,7 @@ test('read-only checker verifies local request, proof receipt and callback', {ti
     const address = await router.getAddress();
     const consumer = await deploy('ExampleConsumer', [address]);
     await (await router.setConsumerAuthorization(await consumer.getAddress(), true)).wait();
-    await provider.send('evm_setNextBlockTimestamp', [roundTime - 4]);
+    await provider.send('evm_setNextBlockTimestamp', [roundTime - 1]);
     const requestReceipt = await (await consumer.request()).wait();
     await assert.rejects(() => verifyRequest(provider, address, 1), /pending/);
     await assert.rejects(() => verifyRequest(provider, address, 2), /does not exist/);

@@ -67,7 +67,7 @@ sequenceDiagram
     C->>R: requestRandomness(callbackGasLimit) + exact fee
     R->>R: Select fixed round and store request
     R-->>C: requestId
-    Note over R,D: Selected round is 4-6 seconds after block timestamp
+    Note over R,D: Selected round is 1-3 seconds after block timestamp
     Note over D: Drand publishes independently
     L->>R: Scan request records through RPC
     L->>D: Fetch signature for stored round

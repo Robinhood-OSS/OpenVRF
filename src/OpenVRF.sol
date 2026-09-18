@@ -13,7 +13,7 @@ interface IRandomnessConsumer {
 contract OpenVRF is EvmnetRegistry, Ownable {
     uint256 public constant GENESIS = 1727521075;
     uint256 public constant PERIOD = 3;
-    uint256 public constant MIN_DELAY = PERIOD;
+    uint256 public constant MIN_DELAY = 0;
     uint32 public constant MAX_CALLBACK_GAS = 1_000_000;
     bytes32 public constant CHAIN_HASH = 0x04f1e9062b8a81f848fded9c12306733282b2727ecced50032187751166ec8c3;
 
@@ -129,7 +129,7 @@ contract OpenVRF is EvmnetRegistry, Ownable {
         if (msg.sender.code.length == 0 || callbackGasLimit < 25_000 || callbackGasLimit > MAX_CALLBACK_GAS) {
             revert InvalidRequest();
         }
-        // Select the second future evmnet round: 4-6 seconds after the block timestamp.
+        // Select the first future evmnet round: 1-3 seconds after the block timestamp.
         // Fast mode assumes a fresh timestamp and stable sequencer ordering, not L1 finality.
         uint256 roundValue = (block.timestamp + MIN_DELAY - GENESIS) / PERIOD + 2;
         if (roundValue > type(uint64).max) revert InvalidRequest();
