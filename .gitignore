@@ -33,3 +33,6 @@ keystores/
 *.pem
 *.p12
 *.pfx
+
+deployments
+pnpm-lock.yaml
