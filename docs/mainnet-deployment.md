@@ -92,8 +92,12 @@ provider for the service. The public HTTP endpoint is
 for production. The sequencer feed is not a WebSocket JSON-RPC endpoint.
 See [official network details](https://docs.robinhood.com/chain/connecting/).
 
-Load `.env` in the current terminal. Repeat this after every local edit or in a
-new terminal. Only source an environment file you control: `source` executes shell syntax.
+For manual `cast` commands below that use shell variables such as `"$RPC_URL"`,
+load `.env` in the current terminal. Repeat after editing `.env` or opening a new
+terminal. This is not needed for either `pnpm run deploy:mainnet` or
+`pnpm run deploy:mainnet:example`: both scripts read the current `.env` directly
+and override stale exported values. Only source a file you control: `source`
+executes shell syntax.
 
 ```sh
 set -a
