@@ -101,7 +101,17 @@ export async function reconcilePending({wallet, provider, state, receiptTimeoutM
   if (pending.manualIntervention) {
     return {resolved: false, hash: pending.hash, reason: `manual intervention: ${pending.manualReason}`};
   }
-  if (await provider.getTransaction(pending.hash)) return {resolved: false, hash: pending.hash, reason: 'mempool'};
+  const visible = await provider.getTransaction(pending.hash);
+  let quote;
+  if (visible) {
+    if (maxGasPrice === undefined || visible.gasPrice == null) {
+      return {resolved: false, hash: pending.hash, reason: 'mempool'};
+    }
+    quote = await gasQuote(provider);
+    // RPC visibility does not establish sequencer inclusion. Allow the existing bounded
+    // replacement path when this transaction no longer meets the required gas price.
+    if (visible.gasPrice >= quote.required) return {resolved: false, hash: pending.hash, reason: 'mempool'};
+  }
   if (!allowBroadcast) return {resolved: false, hash: pending.hash, reason: 'lease held by successor'};
   if (!pending.signedTransaction || pending.nonce === null) {
     return {resolved: false, hash: pending.hash, reason: 'legacy pending state'};
@@ -124,7 +134,7 @@ export async function reconcilePending({wallet, provider, state, receiptTimeoutM
         BigInt(old.nonce) !== nonce || old.value !== 0n) {
       return {resolved: false, hash: pending.hash, reason: 'unsupported fee replacement'};
     }
-    const quote = await gasQuote(provider);
+    quote ??= await gasQuote(provider);
     if (old.gasPrice < quote.required) {
       const minimumBump = (old.gasPrice * 113n + 99n) / 100n;
       const gasPrice = quote.buffered > minimumBump ? quote.buffered : minimumBump;
@@ -137,7 +147,7 @@ export async function reconcilePending({wallet, provider, state, receiptTimeoutM
       const paused = await state.replacePending(pending.hash, replacement,
         old.gasLimit * (gasPrice - old.gasPrice));
       if (paused) return {resolved: false, hash: pending.hash, reason: paused};
-    }
+    } else if (visible) return {resolved: false, hash: pending.hash, reason: 'mempool'};
   }
   await state.rebroadcasting(pending.hash, nowMs + delay, nowMs);
   try {

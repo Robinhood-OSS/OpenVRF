@@ -169,11 +169,15 @@ cross-wallet takeover waits for that lease to expire. PostgreSQL rejects inconsi
 policies for the same version, and a newer active version makes old processes exit. For membership
 changes, stop every instance, increment the version, update the list, and restart them together.
 On startup and every reconciliation, a pending transaction with a mined
-receipt is finalized in the ledger. If it remains in the mempool, the relayer waits. If it is absent
-and the stored nonce is still unused, the relayer rebroadcasts the signed bytes. If its fixed gas price is below the current RPC/base-fee
-requirement and the transaction is not visible in the mempool, it may replace only its gas price
+receipt is finalized in the ledger. If the RPC reports it without a receipt and its gas price meets
+the current requirement, the relayer waits. If it is absent and the stored nonce is still unused,
+the relayer rebroadcasts the signed bytes. If its fixed gas price is below the current RPC/base-fee
+requirement, even when the RPC reports it as pending, it may replace only its gas price
 at the same nonce. The destination, calldata, value and gas limit stay fixed. Earlier hashes
 remain tracked in PostgreSQL so an earlier version being mined still resolves the reservation.
+RPC visibility does not establish sequencer inclusion. On Robinhood, the fee increase addresses
+gas-price eligibility, not ordering priority; replacement acceptance still depends on the provider
+and sequencer. This recovery does not automatically cancel transactions or repair nonce gaps.
 The additional maximum cost is reserved before broadcasting and must fit both spending caps
 and `MAX_GAS_PRICE_GWEI`. Replacement uses the existing rebroadcast limit and backoff. `MAX_REBROADCASTS` bounds those submissions and `REBROADCAST_BACKOFF_SECONDS` controls
 their persisted exponential backoff. If a confirmation-safe chain nonce has already consumed the

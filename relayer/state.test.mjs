@@ -501,10 +501,11 @@ async function replacementFixture(t, requestWei = 10000000n, totalWei = 10000000
   return {path, wallet, state, original};
 }
 
-test('fee replacement persists before broadcast, preserves payload and accounts for the increase', async t => {
+for (const visible of [false, true]) test(`fee replacement persists before broadcast and preserves payload (${visible ? 'RPC-visible' : 'missing'} transaction)`, async t => {
   const {path, wallet, state, original} = await replacementFixture(t);
   let replacement;
-  const provider = {getTransactionReceipt: async () => null, getTransaction: async () => null,
+  const provider = {getTransactionReceipt: async () => null,
+    getTransaction: async () => visible ? Transaction.from(original.signedTransaction) : null,
     getBlockNumber: async () => 10, getTransactionCount: async () => 0,
     send: async () => '0x64', getBlock: async () => ({baseFeePerGas: 120n}),
     broadcastTransaction: async raw => {
@@ -532,17 +533,49 @@ test('fee replacement persists before broadcast, preserves payload and accounts 
   await reopened.close();
 });
 
-for (const [name, requestWei, totalWei, maxGasPrice, expected] of [
+for (const visible of [false, true]) for (const [name, requestWei, totalWei, maxGasPrice, expected] of [
   ['gas', 10000000n, 10000000n, 150n, 'replacement gas price cap'],
   ['request', 2200000n, 10000000n, 200n, 'replacement request spending cap'],
   ['total', 10000000n, 2200000n, 200n, 'replacement total spending cap'],
-]) test(`fee replacement respects ${name} cap without changing the reservation`, async t => {
+]) test(`fee replacement respects ${name} cap (${visible ? 'RPC-visible' : 'missing'} transaction)`, async t => {
   const {wallet, state, original} = await replacementFixture(t, requestWei, totalWei);
-  const provider = {getTransactionReceipt: async () => null, getTransaction: async () => null,
+  const provider = {getTransactionReceipt: async () => null,
+    getTransaction: async () => visible ? Transaction.from(original.signedTransaction) : null,
     getBlockNumber: async () => 10, getTransactionCount: async () => 0,
     send: async () => '0x64', getBlock: async () => ({baseFeePerGas: 120n}),
     broadcastTransaction: assert.fail};
   assert.equal((await reconcilePending({wallet, state, provider, maxGasPrice, now: 2000})).reason, expected);
+  assert.equal(state.data.pending.hash, original.hash);
+  assert.equal(state.data.authorizedWei, '2100000');
+  await state.close();
+});
+
+test('RPC-visible transaction meeting required gas price waits without spending or rebroadcast', async t => {
+  const {wallet, state, original} = await replacementFixture(t);
+  const provider = {getTransactionReceipt: async () => null,
+    getTransaction: async () => Transaction.from(original.signedTransaction),
+    getBlockNumber: async () => 10, getTransactionCount: async () => 0,
+    send: async () => '0x64', getBlock: async () => ({baseFeePerGas: 100n}),
+    broadcastTransaction: assert.fail};
+  const before = JSON.stringify(state.data);
+  assert.equal((await reconcilePending({wallet, state, provider, maxGasPrice: 200n, now: 2000})).reason, 'mempool');
+  assert.equal(JSON.stringify(state.data), before);
+  await state.close();
+});
+
+for (const [name, options, prepare, reason] of [
+  ['lease', {allowBroadcast: false}, async () => {}, 'lease held by successor'],
+  ['backoff', {now: 2000}, async (state, hash) => state.rebroadcasting(hash, 3000n, 1000n), 'rebroadcast backoff'],
+  ['attempt limit', {maxRebroadcasts: 1, now: 2000}, async (state, hash) => state.rebroadcasting(hash, 0n, 1000n), 'manual intervention: rebroadcast limit reached'],
+]) test(`RPC-visible underpriced transaction respects ${name}`, async t => {
+  const {wallet, state, original} = await replacementFixture(t);
+  await prepare(state, original.hash);
+  const provider = {getTransactionReceipt: async () => null,
+    getTransaction: async () => Transaction.from(original.signedTransaction),
+    getBlockNumber: async () => 10, getTransactionCount: async () => 0,
+    send: async () => '0x64', getBlock: async () => ({baseFeePerGas: 120n}),
+    broadcastTransaction: assert.fail};
+  assert.equal((await reconcilePending({wallet, state, provider, maxGasPrice: 200n, ...options})).reason, reason);
   assert.equal(state.data.pending.hash, original.hash);
   assert.equal(state.data.authorizedWei, '2100000');
   await state.close();
